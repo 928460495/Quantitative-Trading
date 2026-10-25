@@ -28,6 +28,15 @@ python scripts/check_data.py               # 检查数据，写出 reports/data_
 
 换数据目录用环境变量 `QT_DATA_DIR`。
 
+## 单因子检验
+
+```bash
+python scripts/run_single_factor.py                      # 沪深300 训练段，全部文献因子
+python scripts/run_single_factor.py --factors rev20 vol20
+```
+
+报告写到 `reports/single_factor/<股票池>_<样本段>/`，`README.md` 是汇总表，每个因子一份详细报告。
+
 ## 最终测试段封存
 
 最终测试段（2022 年至今）在研究流程走完之前不能读取。`qt/config.py` 里的 `check_range()` 会拦住任何碰到测试段的取数请求。只有最后做一次最终测试时，才设置 `QT_UNLOCK_TEST=1`。

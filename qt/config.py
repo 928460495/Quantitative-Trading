@@ -24,28 +24,30 @@ SEGMENTS: dict[str, tuple[str, str | None]] = {
 MAX_FORWARD_DAYS = 21
 
 
-class TestSegmentLocked(RuntimeError):
+class TestSegmentLockedError(RuntimeError):
     """在测试段解锁之前请求了测试段的数据。"""
 
+    __test__ = False  # 名字以 Test 开头，告诉 pytest 这不是测试类
 
-def test_unlocked() -> bool:
+
+def is_test_unlocked() -> bool:
     return os.environ.get("QT_UNLOCK_TEST") == "1"
 
 
 def segment(name: str) -> tuple[str, str | None]:
     if name not in SEGMENTS:
         raise KeyError(f"未知的样本段: {name}，可选 {list(SEGMENTS)}")
-    if name == "test" and not test_unlocked():
-        raise TestSegmentLocked("最终测试段已封存，只在最后一次最终测试时用 QT_UNLOCK_TEST=1 解锁")
+    if name == "test" and not is_test_unlocked():
+        raise TestSegmentLockedError("最终测试段已封存，只在最后一次最终测试时用 QT_UNLOCK_TEST=1 解锁")
     return SEGMENTS[name]
 
 
 def check_range(start: str, end: str | None) -> None:
     """取数区间不能碰到测试段。end 为 None 表示取到最新，同样算碰到。"""
-    if test_unlocked():
+    if is_test_unlocked():
         return
     test_start = pd.Timestamp(SEGMENTS["test"][0])
     if end is None or pd.Timestamp(end) >= test_start or pd.Timestamp(start) >= test_start:
-        raise TestSegmentLocked(
+        raise TestSegmentLockedError(
             f"取数区间 {start} ~ {end} 碰到了最终测试段（{SEGMENTS['test'][0]} 起），测试段尚未解锁"
         )
