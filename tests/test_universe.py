@@ -39,3 +39,16 @@ def test_drops_new_listings_and_bj():
         ]
     )
     assert tradable_mask(df, LISTED).tolist() == [False, True, False]
+
+
+def test_sellable_blocks_suspended_and_limit_down():
+    from qt.universe import sellable_mask
+
+    df = _frame(
+        [
+            ("2016-03-01", "SH600000", np.nan, np.nan, np.nan),
+            ("2016-03-02", "SH600000", 9.0, 1e5, -0.0999),
+            ("2016-03-03", "SH600000", 11.0, 1e5, 0.0998),  # 涨停可以卖
+        ]
+    )
+    assert sellable_mask(df).tolist() == [False, False, True]

@@ -38,7 +38,7 @@ LITERATURE: tuple[Factor, ...] = (
 )
 
 # IC 衰减看这几个持有期；主持有期是 5 天
-HORIZONS: tuple[int, ...] = (1, 5, 10, 20)
+HORIZONS: tuple[int, ...] = (1, 2, 3, 5, 10, 20)
 MAIN_HORIZON = 5
 
 
