@@ -9,6 +9,10 @@
 - 持有期间停牌、没有收益数据的，当天收益记为 0
 - 调出指数的股票当天卖出（数据里已经没有它这一行，按可以卖处理）
 
+超额有两种基准（见 docs/DECISIONS.md 变更记录）：
+- universe：当天有打分、且第二天能买进的股票等权平均。单因子筛选用这个，衡量"在买得到的股票里挑得准不准"
+- universe_all：当天所有有打分的股票等权平均，包括第二天涨停买不进的。作参考，更接近持有指数
+
 组合等权，不考虑权重漂移；最低 5 元佣金不计。这是因子检验用的近似，正式回测在第 5 个 PR。
 """
 
@@ -42,7 +46,7 @@ def simulate_buffer(
     can_sell: pd.Series,
     rule: BufferRule = PRIMARY_RULE,
 ) -> pd.DataFrame:
-    """返回逐日结果：portfolio、universe（有打分的股票等权平均）、excess、buys、sells、cost、net。
+    """返回逐日结果：portfolio、universe、universe_all、excess、excess_all、buys、sells、cost、net、net_all。
 
     score 越大越好；四个序列使用同一个 (datetime, instrument) 索引。
     """
@@ -70,13 +74,16 @@ def simulate_buffer(
 
         r = day["ret1"]
         portfolio = r.reindex(held).fillna(0.0).mean() if held else 0.0
-        universe = r.reindex(scored.index).mean()
+        universe = r.reindex(rank.index[buyable.to_numpy()]).mean()
+        universe_all = r.reindex(scored.index).mean()
         cost = (len(new) * buy_cost(d) + sells * sell_cost(d)) / rule.n_hold
-        rows.append((d, portfolio, universe, len(new), sells, cost))
+        rows.append((d, portfolio, universe, universe_all, len(new), sells, cost))
 
-    out = pd.DataFrame(rows, columns=["datetime", "portfolio", "universe", "buys", "sells", "cost"]).set_index("datetime")
-    out["excess"] = out["portfolio"] - out["universe"]
-    out["net"] = out["excess"] - out["cost"]
+    cols = ["datetime", "portfolio", "universe", "universe_all", "buys", "sells", "cost"]
+    out = pd.DataFrame(rows, columns=cols).set_index("datetime")
+    for suffix, base in (("", "universe"), ("_all", "universe_all")):
+        out[f"excess{suffix}"] = out["portfolio"] - out[base]
+        out[f"net{suffix}"] = out[f"excess{suffix}"] - out["cost"]
     return out
 
 

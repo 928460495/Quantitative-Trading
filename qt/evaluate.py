@@ -5,7 +5,8 @@
 - 日频 IC 和回归系数的标签互相重叠（5 天持有期，相邻两天有 4 天相同），所以 t 值用 Newey-West
   调整，滞后阶数取 持有期 - 1。
 - 分层每 5 个交易日一次、各期不重叠，只用来看信号质量和单调性。
-- 成本门槛用 qt/simulate.py 的日频缓冲组合（持仓 30、缓冲 30/90）。
+- 成本门槛用 qt/simulate.py 的日频缓冲组合（持仓 30、缓冲 30/90），超额相对第二天能买进的股票；
+  相对全部有打分股票的超额作参考。
 - 方向：先按方向把因子统一成"越大越好"，再算分层和组合。
 - IC、回归、分层只用能买入的样本；组合模拟另外处理买不进、卖不掉。
 """
@@ -116,6 +117,8 @@ def simulation_summary(sim: pd.DataFrame, rule: BufferRule) -> dict[str, float]:
         "cost_ann": sim["cost"].mean() * TRADING_DAYS,
         "net_ann": sim["net"].mean() * TRADING_DAYS,
         "net_t": newey_west_t(sim["net"], lag=0),
+        "excess_ann_all": sim["excess_all"].mean() * TRADING_DAYS,
+        "net_ann_all": sim["net_all"].mean() * TRADING_DAYS,
         "turnover": turnover(sim, rule.n_hold).mean(),
     }
 

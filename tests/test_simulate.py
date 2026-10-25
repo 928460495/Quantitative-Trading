@@ -60,3 +60,13 @@ def test_costs_and_excess():
     assert sim.loc[d0, "excess"] == pytest.approx(0.03 - 0.01)
     assert sim.loc[d1, "net"] == pytest.approx(0.03 - 0.01 - sim.loc[d1, "cost"])
     assert turnover(sim, 1).tolist() == [1.0]
+
+
+def test_benchmark_excludes_unbuyable_by_default():
+    score, _, ones = _panel({"A": [3], "B": [2], "C": [1]})
+    ret = pd.Series([0.0, 0.01, 0.09], index=score.index)  # C 第二天涨停买不进，之后又涨 9%
+    can_buy = ones.copy()
+    can_buy.loc[(slice(None), "C")] = False
+    sim = simulate_buffer(score, ret, can_buy, ones, BufferRule(1, 1))
+    assert sim["universe"].iloc[0] == pytest.approx(0.005)
+    assert sim["universe_all"].iloc[0] == pytest.approx(0.1 / 3)

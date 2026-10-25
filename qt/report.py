@@ -94,6 +94,7 @@ def summary_row(res: FactorResult) -> dict:
         "sim_excess_ann": sim["excess_ann"],
         "sim_cost_ann": sim["cost_ann"],
         "sim_net_ann": sim["net_ann"],
+        "sim_net_ann_all": sim["net_ann_all"],
     }
     return row
 
@@ -117,8 +118,9 @@ def write_factor_report(res: FactorResult, factor: Factor, out_dir: Path, contex
 
     sim_table = pd.DataFrame(res.sim_summary).T
     sim_table.index = [f"缓冲 {k}" for k in sim_table.index]
-    sim_table = sim_table[["turnover", "excess_ann", "cost_ann", "net_ann", "net_t"]]
-    sim_table.columns = ["日均单边换手", "年化超额（扣成本前）", "年化成本", "年化超额（扣成本后）", "扣成本后 t 值"]
+    sim_table = sim_table[["turnover", "excess_ann", "cost_ann", "net_ann", "net_t", "net_ann_all"]]
+    sim_table.columns = ["日均单边换手", "年化超额（扣成本前）", "年化成本", "年化超额（扣成本后）", "扣成本后 t 值",
+                         "扣成本后（参考：全体基准）"]
 
     lines = [
         f"# {res.name}",
@@ -175,7 +177,8 @@ def write_factor_report(res: FactorResult, factor: Factor, out_dir: Path, contex
         "每天调仓，持仓 30 只等权；排名进前 30 才买，已持有的排名掉出缓冲线才卖。",
         "买不进（入场日停牌或涨停）跳过，卖不掉（入场日停牌或跌停）继续持有。",
         "成本：买入 0.125%，卖出佣金 + 印花税 + 滑点（docs/DECISIONS.md），最低 5 元佣金不计。",
-        "超额是相对当天有打分的全体股票等权平均，不是相对沪深300 指数。",
+        "超额默认相对当天有打分、且第二天能买进的股票等权平均（筛选门槛用这个）；",
+        "最后一列相对所有有打分的股票，包括第二天涨停买不进的，作参考。两者都不是相对沪深300 指数。",
         "",
         sim_table.to_markdown(floatfmt=".4f"),
         "",

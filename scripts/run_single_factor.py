@@ -75,7 +75,7 @@ def main() -> None:
                 "single_factor",
                 {"factor": f.name, "expr": f.expr, "direction": res.direction, "market": args.market,
                  "segment": args.segment, "horizon": MAIN_HORIZON, "rule": rule.label,
-                 "neutralized": False, "data_version": _data_version()},
+                 "benchmark": "buyable", "neutralized": False, "data_version": _data_version()},
                 {"rank_ic": res.rank_ic[MAIN_HORIZON]["mean"], "t_nw": res.rank_ic[MAIN_HORIZON]["t_nw"],
                  **res.sim_summary[rule.label], "category": res.category},
             )
@@ -84,17 +84,18 @@ def main() -> None:
     summary.to_csv(out_dir / "summary.csv", float_format="%.6f")
     _write_index(summary, out_dir, context)
     print(summary[["category", f"rank_ic_{MAIN_HORIZON}d", f"t_nw_{MAIN_HORIZON}d", "sim_turnover",
-                   "sim_excess_ann", "sim_net_ann", "bottom_t"]].round(4).to_string())
+                   "sim_excess_ann", "sim_net_ann", "sim_net_ann_all", "bottom_t"]].round(4).to_string())
     print(f"试验日志里不同配置的单因子试验共 {count_unique(kind='single_factor')} 个")
 
 
 def _write_index(summary: pd.DataFrame, out_dir: Path, context: str) -> None:
     h = MAIN_HORIZON
     show = summary[["category", "direction", f"rank_ic_{h}d", f"icir_{h}d", f"t_nw_{h}d", "rank_ic_1d",
-                    "reversed_year_ratio", "monotonicity", "bottom_t", "sim_turnover", "sim_excess_ann", "sim_net_ann"]].copy()
+                    "reversed_year_ratio", "monotonicity", "bottom_t", "sim_turnover", "sim_excess_ann", "sim_net_ann",
+                    "sim_net_ann_all"]].copy()
     show.index = [f"[{n}]({n}.md)" for n in show.index]
     show.columns = ["分类", "方向", "RankIC", "ICIR", "t 值", "1天 RankIC", "反向年份占比", "单调性",
-                    "最低组 t 值", "日均换手", "年化超额", "扣成本后"]
+                    "最低组 t 值", "日均换手", "年化超额", "扣成本后", "扣成本后（全体基准）"]
     counts = summary["category"].value_counts()
     lines = [
         "# 单因子检验汇总",
@@ -110,8 +111,8 @@ def _write_index(summary: pd.DataFrame, out_dir: Path, context: str) -> None:
         "",
         show.to_markdown(floatfmt=".4f"),
         "",
-        f"日均换手、年化超额、扣成本后这三列来自缓冲 {PRIMARY_RULE.label} 的日频组合模拟；"
-        f"缓冲 {', '.join(r.label for r in COMPARISON_RULES)} 的结果在各因子的详细报告里。",
+        f"最后四列来自缓冲 {PRIMARY_RULE.label} 的日频组合模拟；缓冲 {', '.join(r.label for r in COMPARISON_RULES)} 的结果在各因子的详细报告里。",
+        "超额默认相对第二天能买进的股票（筛选门槛用这个）；最后一列相对所有有打分的股票，包括第二天涨停买不进的，作参考。",
         "",
     ]
     (out_dir / "README.md").write_text("\n".join(lines))
