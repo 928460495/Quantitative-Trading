@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from qt.config import TestSegmentLocked, check_range, segment
+from qt.config import TestSegmentLockedError, check_range, segment
 from qt.data import drop_embargo
 
 
@@ -17,7 +17,7 @@ def test_train_and_valid_segments_are_open():
 
 
 def test_test_segment_locked_by_default():
-    with pytest.raises(TestSegmentLocked):
+    with pytest.raises(TestSegmentLockedError):
         segment("test")
 
 
@@ -31,7 +31,7 @@ def test_test_segment_unlocks_with_env(monkeypatch):
     [("2020-01-01", "2022-01-01"), ("2022-03-01", "2022-06-01"), ("2015-01-01", None)],
 )
 def test_check_range_rejects_test_segment(start, end):
-    with pytest.raises(TestSegmentLocked):
+    with pytest.raises(TestSegmentLockedError):
         check_range(start, end)
 
 
