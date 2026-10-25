@@ -26,7 +26,7 @@ python scripts/download_data.py --tag 2026-10-25
 python scripts/check_data.py               # 检查数据，写出 reports/data_check.md
 ```
 
-换数据目录用环境变量 `QT_DATA_DIR`。
+换数据目录用环境变量 `QT_DATA_DIR`；外部数据目录和试验日志也可以分别用 `QT_EXTERNAL_DIR`、`QT_TRIALS_FILE` 改到别处（比如拿假数据测试时，不污染正式日志）。
 
 ## 单因子检验
 
@@ -35,7 +35,15 @@ python scripts/run_single_factor.py                      # 沪深300 训练段�
 python scripts/run_single_factor.py --factors rev20 vol20
 ```
 
-报告写到 `reports/single_factor/<股票池>_<样本段>/`，`README.md` 是汇总表，每个因子一份详细报告。
+报告写到 `reports/single_factor/<股票池>_<样本段>/`，`README.md` 是汇总表，每个因子一份详细报告。每次检验都会记一条到试验日志 `reports/trials.jsonl`。
+
+### 行业和市值中性化
+
+需要申万行业和巨潮股本数据，要在能访问这两个网站的电脑上采集，步骤见 [`data/external/README.md`](data/external/README.md)。数据就位后：
+
+```bash
+python scripts/run_single_factor.py --neutralize   # 写到 reports/single_factor/<股票池>_<样本段>_neutral/
+```
 
 ## 最终测试段封存
 
