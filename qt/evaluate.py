@@ -28,6 +28,11 @@ VETO = "排雷因子"
 REJECTED = "淘汰"
 
 
+def _demeaned(df: pd.DataFrame) -> tuple[pd.Series, pd.Series, pd.Series]:
+    g = df.groupby(level="datetime")
+    return df["f"] - g["f"].transform("mean"), df["r"] - g["r"].transform("mean"), g.size()
+
+
 def ic_series(factor: pd.Series, ret: pd.Series, method: str = "spearman") -> pd.Series:
     """逐日横截面相关系数。当天有效样本少于 MIN_STOCKS 时记为 NaN。"""
     df = pd.DataFrame({"f": factor, "r": ret}).dropna()
@@ -35,25 +40,22 @@ def ic_series(factor: pd.Series, ret: pd.Series, method: str = "spearman") -> pd
         df = df.groupby(level="datetime").rank()
     elif method != "pearson":
         raise ValueError(f"未知的方法: {method}")
-
-    def corr(g: pd.DataFrame) -> float:
-        return g["f"].corr(g["r"]) if len(g) >= MIN_STOCKS else np.nan
-
-    return df.groupby(level="datetime").apply(corr).rename(method)
+    d, e, n = _demeaned(df)
+    by = d.index.get_level_values("datetime")
+    num = (d * e).groupby(by).sum()
+    den = np.sqrt((d * d).groupby(by).sum() * (e * e).groupby(by).sum())
+    ic = (num / den).replace([np.inf, -np.inf], np.nan).where(n >= MIN_STOCKS)
+    ic.index.name = "datetime"
+    return ic.rename(method)
 
 
 def factor_return_series(z: pd.Series, ret: pd.Series) -> pd.Series:
     """回归法：每天把远期收益对标准化后的因子做横截面回归（带截距），返回斜率，即因子收益率。"""
-    df = pd.DataFrame({"z": z, "r": ret}).dropna()
-
-    def slope(g: pd.DataFrame) -> float:
-        if len(g) < MIN_STOCKS:
-            return np.nan
-        x = g["z"] - g["z"].mean()
-        denom = x @ x
-        return float(x @ (g["r"] - g["r"].mean()) / denom) if denom > 0 else np.nan
-
-    return df.groupby(level="datetime").apply(slope).rename("factor_return")
+    d, e, n = _demeaned(pd.DataFrame({"f": z, "r": ret}).dropna())
+    by = d.index.get_level_values("datetime")
+    slope = ((d * e).groupby(by).sum() / (d * d).groupby(by).sum()).replace([np.inf, -np.inf], np.nan)
+    slope.index.name = "datetime"
+    return slope.where(n >= MIN_STOCKS).rename("factor_return")
 
 
 def newey_west_t(x: pd.Series, lag: int) -> float:
