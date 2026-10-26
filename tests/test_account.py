@@ -253,3 +253,37 @@ def test_drawdown_stop_liquidates_and_waits_for_fresh_signal():
     assert t["date"].iloc[2] == dates[8]          # 均线信号先变空（第 6 天）再变满（第 7 天），第 8 天才回来
     assert (res.daily["slot_limit"].iloc[3:8] == 0).all()
     assert res.daily["n_holdings"].iloc[-1] == 1  # 回来后最高点已重置，再跌 18% 不会触发
+
+
+# ---------- 任务 6：退市处理和指标 ----------
+
+from qt.account import AccountResult, account_metrics  # noqa: E402
+
+
+def test_delisted_holding_sold_at_last_price():
+    rules = AccountRules(n_hold=1, sell_rank=3, max_stock_weight=1.0, stop_loss=None, drawdown_stop=None)
+    path = [10.0, 10.0, 9.0, 8.0, NAN, NAN]                  # 第 3 天之后再也没有价格
+    can_sell = {"A": [True, True, True, True, False, False]}
+    res = run_account(_scenario({"A": [1.0, 1.0, 1.0, 1.0, NAN, NAN]}, 6, prices={"A": path}, can_sell=can_sell), rules)
+    sells = res.trades[res.trades["side"] == "sell"]
+    assert list(sells["reason"]) == ["delisted"] and sells["date"].iloc[0] == pd.Timestamp("2019-01-08")
+    assert sells["price"].iloc[0] == 8.0
+    assert res.daily["n_holdings"].iloc[-1] == 0
+
+
+def test_metrics_on_known_path():
+    dates = pd.bdate_range("2019-01-02", periods=4)
+    daily = pd.DataFrame({"nav": [100.0, 110.0, 99.0, 121.0], "cash": [100.0, 10.0, 9.0, 21.0],
+                          "stock_value": [0.0, 100.0, 90.0, 100.0], "cost": [0.0, 0.1, 0.0, 0.2]}, index=dates)
+    trades = pd.DataFrame([(dates[2], "A", "sell", 100, 1.0, 50.0, 0.1, "stop"),
+                           (dates[3], "B", "sell", 100, 1.0, 20.0, 0.1, "delisted")], columns=[
+        "date", "instrument", "side", "shares", "price", "value", "cost", "reason"])
+    bench = pd.Series([1000.0, 1010.0, 1020.0, 1030.0], index=dates)
+    m = account_metrics(AccountResult(daily=daily, trades=trades), bench)
+    assert m["max_drawdown"] == pytest.approx(-0.10)
+    assert m["annual_return"] == pytest.approx(1.21 ** (252 / 3) - 1)
+    assert m["bench_annual"] == pytest.approx(1.03 ** (252 / 3) - 1)
+    assert m["excess_annual"] == pytest.approx(m["annual_return"] - m["bench_annual"])
+    assert m["turnover"] == pytest.approx((50 / 99 + 20 / 121) / 3)
+    assert (m["n_trades"], m["n_stops"], m["n_delisted"]) == (2, 1, 1)
+    assert m["avg_exposure"] == pytest.approx(np.mean([100 / 110, 90 / 99, 100 / 121]))

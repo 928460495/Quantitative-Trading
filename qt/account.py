@@ -106,9 +106,11 @@ class _Account:
     def value_of(self, col: int, prices: np.ndarray) -> float:
         return self.units[col] * prices[col]
 
-    def sell(self, i: int, col: int, reason: str) -> None:
+    def sell(self, i: int, col: int, reason: str, adj: float | None = None, raw: float | None = None) -> None:
+        """按第 i 天收盘卖出；退市时传入最后的价格。"""
         d = self.data
-        adj, raw = d.adj_close[i, col], d.raw_close[i, col]
+        adj = d.adj_close[i, col] if adj is None else adj
+        raw = d.raw_close[i, col] if raw is None else raw
         value = self.units[col] * adj
         cost = trade_cost(value, "sell", d.dates[i], self.rules.cost_multiplier)
         self.cash += value - cost
@@ -165,6 +167,9 @@ def run_account(data: MarketData, rules: AccountRules = AccountRules(), exposure
     """
     acct = _Account(data, rules)
     marks = pd.DataFrame(data.adj_close).ffill().to_numpy()  # 估值用：停牌沿用最后一个价格
+    raw_marks = pd.DataFrame(data.raw_close).ffill().to_numpy()
+    has_price = ~np.isnan(data.adj_close)
+    last_price_day = np.where(has_price.any(axis=0), len(data.dates) - 1 - np.argmax(has_price[::-1], axis=0), -1)
     exp = np.ones(len(data.dates)) if exposure is None else exposure.reindex(data.dates).fillna(1.0).to_numpy(float)
     navs = [acct.cash]
     peak, halted, seen_out = acct.cash, False, False
@@ -187,8 +192,11 @@ def run_account(data: MarketData, rules: AccountRules = AccountRules(), exposure
             halted, peak = False, navs[s]
         slot_limit = 0 if halted else int(np.floor(rules.n_hold * exp[s] + 1e-9))
 
-        # 1. 卖：回撤兜底 → 止损 → 排名 → 仓位上限（多出来的按排名从低到高卖）
+        # 1. 卖：退市 → 回撤兜底 → 止损 → 排名 → 仓位上限（多出来的按排名从低到高卖）
         for col in list(acct.units):
+            if i > last_price_day[col]:  # 之后再也没有价格：按最后价格卖出（偏乐观）
+                acct.sell(i, col, "delisted", adj=marks[i, col], raw=raw_marks[i, col])
+                continue
             if not (data.can_sell[s, col] and tradable_today[col]):
                 continue
             if halted:
@@ -242,3 +250,34 @@ def run_account(data: MarketData, rules: AccountRules = AccountRules(), exposure
     daily = pd.DataFrame(rows, columns=["date", "nav", "cash", "stock_value", "n_holdings", "slot_limit", "cost",
                                         "n_buys", "n_sells"]).set_index("date")
     return AccountResult(daily=daily, trades=pd.DataFrame(acct.trades, columns=_TRADE_COLUMNS))
+
+
+TRADING_DAYS = 252
+
+
+def account_metrics(result: AccountResult, bench_close: pd.Series) -> dict[str, float]:
+    """复合年化收益、相对基准、最大回撤、波动、夏普（无风险利率按 0）、换手、成本、各类卖出次数、平均仓位。"""
+    daily = result.daily
+    nav = daily["nav"]
+    n = len(nav) - 1
+    bench = bench_close.reindex(nav.index).ffill()
+    rets = nav.pct_change().iloc[1:]
+    trades = result.trades
+    sold = trades[trades["side"] == "sell"].groupby("date")["value"].sum().reindex(nav.index, fill_value=0.0)
+    annual = (nav.iloc[-1] / nav.iloc[0]) ** (TRADING_DAYS / n) - 1
+    bench_annual = (bench.iloc[-1] / bench.iloc[0]) ** (TRADING_DAYS / n) - 1
+    reasons = trades["reason"].value_counts()
+    return {
+        "annual_return": annual,
+        "bench_annual": bench_annual,
+        "excess_annual": annual - bench_annual,
+        "max_drawdown": float((nav / nav.cummax() - 1).min()),
+        "volatility": rets.std() * np.sqrt(TRADING_DAYS),
+        "sharpe": rets.mean() / rets.std() * np.sqrt(TRADING_DAYS) if rets.std() > 0 else np.nan,
+        "turnover": float((sold / nav).iloc[1:].mean()),
+        "cost_annual": float((daily["cost"] / nav).iloc[1:].mean() * TRADING_DAYS),
+        "n_trades": len(trades),
+        "n_stops": int(reasons.get("stop", 0)),
+        "n_delisted": int(reasons.get("delisted", 0)),
+        "avg_exposure": float((daily["stock_value"] / nav).iloc[1:].mean()),
+    }
