@@ -6,3 +6,4 @@ mlruns/
 data/raw/
 *.tar.gz
 .DS_Store
+data/cache/

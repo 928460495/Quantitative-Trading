@@ -153,3 +153,25 @@ def test_vectorized_ic_matches_pandas_corr():
         assert np.allclose(ic_series(f, r, method), expected)
     slope = pd.DataFrame({"f": f, "r": r}).dropna().groupby(level="datetime").apply(lambda g: np.polyfit(g["f"], g["r"], 1)[0])
     assert np.allclose(factor_return_series(f, r), slope)
+
+
+def test_standardize_dataframe_matches_series_columnwise():
+    from qt.preprocess import standardize
+
+    rng = np.random.default_rng(3)
+    idx = pd.MultiIndex.from_product([pd.bdate_range("2016-01-04", periods=5), [f"s{i}" for i in range(40)]],
+                                     names=["datetime", "instrument"])
+    df = pd.DataFrame({"x": rng.standard_t(2, len(idx)), "y": rng.normal(size=len(idx))}, index=idx)
+    df.iloc[::7, 0] = np.nan
+    out = standardize(df)
+    for c in df:
+        assert np.allclose(out[c], standardize(df[c]), equal_nan=True)
+
+
+def test_winsorize_skips_day_with_zero_mad():
+    from qt.preprocess import winsorize_mad
+
+    idx = pd.MultiIndex.from_product([[pd.Timestamp("2016-01-04")], [f"s{i}" for i in range(10)]],
+                                     names=["datetime", "instrument"])
+    s = pd.Series([1.0] * 9 + [50.0], index=idx)  # 中位数 1、MAD 0
+    assert winsorize_mad(s).equals(s)
