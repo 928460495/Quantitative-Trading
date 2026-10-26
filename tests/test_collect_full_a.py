@@ -213,3 +213,63 @@ def test_collect_indexes_failure_is_recorded(tmp_path):
     status = collect.collect_indexes(FakeAkIndex({"000985": "2009-01-05"}), tmp_path, start="20090101")
     assert status["H00300"].startswith("failed: ")
     assert status["000985"].startswith("ok ")
+
+
+def _daily_frame(instrument, dates):
+    code = collect.to_bs_code(instrument)
+    return pd.DataFrame([[d, code, "10.0", "10.5", "1000000", "10500000.0", "2.0", "1", "0", "8.1", "", "1.5", "6.0"]
+                         for d in dates], columns=collect.DAILY_FIELDS.split(","))
+
+
+@pytest.fixture
+def raw_dir(tmp_path):
+    raw = tmp_path / "raw"
+    (raw / "daily").mkdir(parents=True)
+    pd.DataFrame({"instrument": ["SH600000", "SZ000002", "SZ300750"], "name": ["A", "B", "C"],
+                  "ipo_date": ["1999-11-10", "2005-01-04", "2015-03-02"],
+                  "out_date": ["", "2012-06-29", ""]}).to_csv(raw / "stocks.csv", index=False)
+    _daily_frame("SH600000", ["2010-06-01", "2011-06-01", "2015-06-01"]).to_csv(raw / "daily" / "SH600000.csv", index=False)
+    _daily_frame("SZ000002", ["2010-06-01", "2011-06-01"]).to_csv(raw / "daily" / "SZ000002.csv", index=False)
+    _daily_frame("SZ300750", ["2015-06-01"]).to_csv(raw / "daily" / "SZ300750.csv", index=False)
+    (raw / "reports" / "income").mkdir(parents=True)
+    for d, codes in {"2010-12-31": ["600000", "000002"], "2011-12-31": ["600000"], "2015-12-31": ["600000", "300750"]}.items():
+        pd.DataFrame({"SECURITY_CODE": codes, "NOTICE_DATE": f"{d[:4]}-04-20 00:00:00",
+                      "PARENT_NETPROFIT": 1.0}).to_csv(raw / "reports" / "income" / f"{d}.csv", index=False)
+    (raw / "index").mkdir()
+    pd.DataFrame({"date": ["2010-06-01", "2010-06-02"], "close": [3000.0, 3010.0]}).to_csv(raw / "index" / "H00300.csv", index=False)
+    (raw / "status.json").write_text('{"daily": {"SH600000": "ok", "SZ000003": "failed: x"}}')
+    return raw
+
+
+def test_coverage_counts_listed_stocks_per_year(raw_dir):
+    stocks, daily, reports = collect.load_raw(raw_dir)
+    cov = collect.coverage(stocks, daily, reports)
+    assert cov.loc[2011, "listed"] == 2 and cov.loc[2011, "daily"] == 2 and cov.loc[2011, "income"] == 1
+    assert cov.loc[2015, "listed"] == 2 and cov.loc[2015, "income"] == 2
+
+
+def test_pack_roundtrip(raw_dir, tmp_path):
+    import json
+    import tarfile
+
+    path = collect.pack(raw_dir, tmp_path / "out", collected_on="20261027")
+    assert path.name == "full_a_20261027.tar"
+    with tarfile.open(path) as tar:
+        names = set(tar.getnames())
+        tar.extractall(tmp_path / "x", filter="data")
+    assert {"stocks.parquet", "daily.parquet", "reports/income.parquet", "index.parquet", "meta.json"} <= names
+    daily = pd.read_parquet(tmp_path / "x" / "daily.parquet")
+    assert len(daily) == 6 and set(daily["instrument"]) == {"SH600000", "SZ000002", "SZ300750"}
+    assert str(daily["date"].dtype).startswith("datetime64")
+    assert daily["close"].dtype == "float32" and daily["isST"].dtype == "int8" and daily["tradestatus"].dtype == "int8"
+    assert daily["pbMRQ"].isna().all()  # 空字符串读成缺失
+    income = pd.read_parquet(tmp_path / "x" / "reports" / "income.parquet")
+    assert {"instrument", "report_date", "SECURITY_CODE", "NOTICE_DATE"} <= set(income.columns)
+    index = pd.read_parquet(tmp_path / "x" / "index.parquet")
+    assert list(index.columns) == ["symbol", "date", "close"]
+    meta = json.loads((tmp_path / "x" / "meta.json").read_text())
+    assert meta["collected_on"] == "20261027"
+    assert meta["status"]["daily"] == {"ok": 1, "failed": 1}
+    assert meta["failures"]["daily"] == {"SZ000003": "failed: x"}
+    assert meta["coverage"]["2011"]["income"] == 1
+    assert not any(p.name.startswith(".") or p.name == "staging" for p in (tmp_path / "out").iterdir())

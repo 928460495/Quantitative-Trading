@@ -7,3 +7,4 @@ data/raw/
 *.tar.gz
 .DS_Store
 data/cache/
+data/full_a_*.tar
