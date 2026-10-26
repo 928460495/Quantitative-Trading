@@ -1,5 +1,8 @@
-# 只在本地采集外部数据时需要（scripts/download_data.py、scripts/collect_external.py）。
+# 只在本地采集外部数据时需要（scripts/download_data.py、scripts/collect_external.py、scripts/collect_full_a.py）。
 # 不含 Qlib：采集用不到它，单独装可以避开 Qlib 依赖 gym 时的源码编译。
 numpy>=2.0
 pandas>=2.2
 akshare>=1.18
+baostock>=0.8.9
+pyarrow>=15.0
+requests>=2.31
