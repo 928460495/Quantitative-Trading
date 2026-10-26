@@ -22,6 +22,20 @@ python scripts/collect_external.py        # 沪深300 历史上的全部成分�
 - "按前两位归类得到 N 个一级行业"：申万 2021 版应该是 31 个。不是的话先别提交，告诉我实际的代码长度分布
 - "失败 N 只"：应该是 0。不是的话再跑一次
 
+### 行业表下载失败（SSL 证书错误）时
+
+申万网站的证书在一些电脑上会校验失败（`CERTIFICATE_VERIFY_FAILED`）。这时用浏览器打开下面的地址手动下载，再让脚本读本地文件：
+
+```
+https://www.swsresearch.com/swindex/pdf/SwClass2021/StockClassifyUse_stock.xls
+```
+
+```bash
+python scripts/collect_external.py --only industry --industry-file ~/Downloads/StockClassifyUse_stock.xls
+```
+
+行业表下载失败不会中断股本的采集，股本照常进行。
+
 然后提交这三个文件：
 
 ```bash

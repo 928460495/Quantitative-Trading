@@ -59,3 +59,41 @@ def test_shares_retry_failure_and_resume(dirs):
     assert ak2.calls == {"000002": 1}
     assert not failed
     assert sorted(shares["symbol"].unique()) == ["000001", "000002", "600000"]
+
+
+SW_ROWS = {"股票代码": ["000001", "600000"], "计入日期": ["2011-01-01", "2014-06-30"],
+           "行业代码": ["480101", "480301"], "更新日期": ["2021-07-30", "2021-07-30"]}
+
+
+def test_industry_from_local_file(dirs, tmp_path):
+    path = tmp_path / "StockClassifyUse_stock.csv"
+    pd.DataFrame(SW_ROWS).to_csv(path, index=False)
+    df = collect.collect_industry(None, file=path)
+    assert df["symbol"].tolist() == ["000001", "600000"]
+    assert df["industry_code"].tolist() == ["480101", "480301"]  # 代码前面的 0 不能丢
+    assert (dirs / "external" / collect.INDUSTRY_FILE).exists()
+
+
+def test_industry_from_local_xlsx(dirs, tmp_path):
+    pytest.importorskip("openpyxl")
+    path = tmp_path / "StockClassifyUse_stock.xlsx"
+    pd.DataFrame(SW_ROWS).to_excel(path, index=False)
+    df = collect.collect_industry(None, file=path)
+    assert df["symbol"].tolist() == ["000001", "600000"]
+
+
+def test_industry_file_with_wrong_columns(dirs, tmp_path):
+    path = tmp_path / "wrong.csv"
+    pd.DataFrame({"代码": ["000001"]}).to_csv(path, index=False)
+    with pytest.raises(ValueError, match="缺少列"):
+        collect.collect_industry(None, file=path)
+
+
+def test_industry_download_failure_does_not_stop(dirs, capsys):
+    class Broken(FakeAk):
+        def stock_industry_clf_hist_sw(self):
+            raise ConnectionError("ssl")
+
+    assert collect.collect_industry(Broken(), retries=1, pause=0) is None
+    out = capsys.readouterr().out
+    assert "StockClassifyUse_stock.xls" in out and "--industry-file" in out

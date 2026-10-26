@@ -7,6 +7,8 @@
     python scripts/collect_external.py                   # 沪深300 历史上的所有成分股
     python scripts/collect_external.py --market csi800   # 以后扩股票池时用
     python scripts/collect_external.py --only industry   # 只重下行业
+    python scripts/collect_external.py --only industry --industry-file ~/Downloads/StockClassifyUse_stock.xls
+                                                         # 行业表下载失败时，用浏览器手动下载后读本地文件
 
 股本要逐只股票请求，沪深300 历史成分约 950 只，按默认间隔大约要 20–30 分钟。中途断了直接重跑，
 已经下载过的股票会跳过（缓存在 data/raw/share_changes/，不进仓库）。失败的股票记在
@@ -31,9 +33,11 @@ sys.path.insert(0, str(ROOT))
 from qt.config import DATA_DIR  # noqa: E402
 from qt.external import (  # noqa: E402
     EXTERNAL_DIR,
+    SW_INDUSTRY_URL,
     INDUSTRY_FILE,
     SHARES_FILE,
     industry_level1,
+    read_sw_industry_file,
     tidy_industry,
     tidy_share_changes,
     to_symbol,
@@ -64,12 +68,21 @@ def _retry(fn, label: str, retries: int, pause: float):
     raise AssertionError("unreachable")
 
 
-def collect_industry(ak, retries: int = 3, pause: float = 1.0) -> pd.DataFrame:
-    print("下载申万行业变动历史 ...")
-    try:
-        raw = _retry(ak.stock_industry_clf_hist_sw, "申万行业", retries, pause)
-    except Exception as e:
-        sys.exit(f"申万行业下载失败：{type(e).__name__}: {e}\n请确认能打开 https://www.swsresearch.com")
+def collect_industry(ak, retries: int = 3, pause: float = 1.0, file: Path | None = None) -> pd.DataFrame | None:
+    """下载失败时返回 None，不中断后面的股本采集。"""
+    if file is not None:
+        print(f"读取本地申万行业表 {file} ...")
+        raw = read_sw_industry_file(file)
+    else:
+        print("下载申万行业变动历史 ...")
+        try:
+            raw = _retry(ak.stock_industry_clf_hist_sw, "申万行业", retries, pause)
+        except Exception as e:
+            print(f"申万行业下载失败：{type(e).__name__}: {e}")
+            print("可以用浏览器打开下面的地址手动下载，再用 --industry-file 指定下载好的文件：")
+            print(f"  {SW_INDUSTRY_URL}")
+            print("  python scripts/collect_external.py --only industry --industry-file <下载好的文件路径>")
+            return None
     df = tidy_industry(raw)
     df.to_csv(EXTERNAL_DIR / INDUSTRY_FILE, index=False)
     level1 = df["industry_code"].map(industry_level1)
@@ -115,6 +128,7 @@ def main() -> None:
     ap.add_argument("--only", choices=["industry", "shares"], help="只采集其中一项")
     ap.add_argument("--pause", type=float, default=1.0, help="两次请求之间等几秒，默认 1")
     ap.add_argument("--retries", type=int, default=3)
+    ap.add_argument("--industry-file", type=Path, help="手动下载的申万行业表（.xls），不联网下载")
     args = ap.parse_args()
 
     try:
@@ -128,8 +142,11 @@ def main() -> None:
     meta |= {"akshare_version": ak.__version__, "market": args.market}
 
     if args.only in (None, "industry"):
-        ind = collect_industry(ak, args.retries, args.pause)
-        meta["industry"] = {"time": datetime.now(timezone.utc).isoformat(timespec="seconds"), "rows": len(ind)}
+        file = args.industry_file.expanduser() if args.industry_file else None
+        ind = collect_industry(ak, args.retries, args.pause, file)
+        if ind is not None:
+            meta["industry"] = {"time": datetime.now(timezone.utc).isoformat(timespec="seconds"), "rows": len(ind),
+                                "source": file.name if file else "akshare"}
     if args.only in (None, "shares"):
         symbols = market_symbols(args.market)
         shares, failed = collect_shares(ak, symbols, args.pause, args.retries)
@@ -143,6 +160,8 @@ def main() -> None:
             print(f"有 {len(failed)} 只失败，重跑这个脚本会只补这些")
 
     meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2))
+    if not (EXTERNAL_DIR / INDUSTRY_FILE).exists():
+        print(f"注意：还没有 {INDUSTRY_FILE}，行业表需要按上面的提示手动下载后再跑一次 --only industry")
     print(f"完成，结果在 {EXTERNAL_DIR}。请把 {INDUSTRY_FILE}、{SHARES_FILE}、{META_FILE} 提交到仓库")
 
 

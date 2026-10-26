@@ -29,6 +29,21 @@ def industry_level1(code: str) -> str:
     return str(code)[:2]
 
 
+SW_INDUSTRY_URL = "https://www.swsresearch.com/swindex/pdf/SwClass2021/StockClassifyUse_stock.xls"
+_SW_COLUMNS = {"股票代码": "symbol", "计入日期": "start_date", "行业代码": "industry_code", "更新日期": "update_time"}
+
+
+def read_sw_industry_file(path: Path) -> pd.DataFrame:
+    """读手动下载的申万行业分类表（SW_INDUSTRY_URL），列名改成和 AkShare 一样。支持 .xls / .xlsx / .csv。"""
+    dtype = {"股票代码": str, "行业代码": str}
+    path = Path(path)
+    raw = pd.read_csv(path, dtype=dtype) if path.suffix.lower() == ".csv" else pd.read_excel(path, dtype=dtype)
+    missing = set(_SW_COLUMNS) - set(raw.columns)
+    if missing:
+        raise ValueError(f"{path.name} 里缺少列 {sorted(missing)}，实际的列是 {list(raw.columns)}")
+    return raw.rename(columns=_SW_COLUMNS)
+
+
 def tidy_industry(raw: pd.DataFrame) -> pd.DataFrame:
     """整理 AkShare stock_industry_clf_hist_sw() 的返回值。"""
     df = raw[["symbol", "start_date", "industry_code"]].copy()
