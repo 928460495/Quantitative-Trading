@@ -15,6 +15,8 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+from qt.costs import trade_cost
+
 LOT = 100
 STAR_MIN_SHARES = 200  # 科创板最少 200 股，之后按 1 股加
 
@@ -77,3 +79,126 @@ def lot_shares(budget: float, raw_price: float, instrument: str) -> int:
         shares = math.floor(budget / raw_price)
         return shares if shares >= STAR_MIN_SHARES else 0
     return math.floor(budget / raw_price / LOT) * LOT
+
+
+@dataclass
+class AccountResult:
+    daily: pd.DataFrame
+    trades: pd.DataFrame
+
+
+_TRADE_COLUMNS = ["date", "instrument", "side", "shares", "price", "value", "cost", "reason"]
+
+
+class _Account:
+    """一个账户的状态和买卖动作。持仓记复权份额（units），成本记复权价。"""
+
+    def __init__(self, data: MarketData, rules: AccountRules):
+        self.data, self.rules = data, rules
+        self.cash = float(rules.cash)
+        self.units: dict[int, float] = {}
+        self.cost_price: dict[int, float] = {}
+        self.trades: list[tuple] = []
+        self.day_cost = 0.0
+        self.n_buys = self.n_sells = 0
+
+    def value_of(self, col: int, prices: np.ndarray) -> float:
+        return self.units[col] * prices[col]
+
+    def sell(self, i: int, col: int, reason: str) -> None:
+        d = self.data
+        adj, raw = d.adj_close[i, col], d.raw_close[i, col]
+        value = self.units[col] * adj
+        cost = trade_cost(value, "sell", d.dates[i], self.rules.cost_multiplier)
+        self.cash += value - cost
+        self.day_cost += cost
+        self.n_sells += 1
+        self.trades.append((d.dates[i], d.instruments[col], "sell", round(value / raw), raw, value, cost, reason))
+        del self.units[col], self.cost_price[col]
+
+    def buy(self, i: int, col: int, budget: float) -> float:
+        """按预算买，付完成本现金不够就一手一手往下减。返回买入金额（0 表示没买）。"""
+        d = self.data
+        code, adj, raw = d.instruments[col], d.adj_close[i, col], d.raw_close[i, col]
+        shares = lot_shares(min(budget, self.cash), raw, code)
+        step = 1 if code.startswith(("SH688", "SH689")) else LOT
+        while shares > 0:
+            value = shares * raw
+            cost = trade_cost(value, "buy", d.dates[i], self.rules.cost_multiplier)
+            if value + cost <= self.cash:
+                break
+            shares -= step
+            if code.startswith(("SH688", "SH689")) and shares < STAR_MIN_SHARES:
+                shares = 0
+        if shares <= 0:
+            return 0.0
+        self.cash -= value + cost
+        self.day_cost += cost
+        self.n_buys += 1
+        self.units[col] = value / adj
+        self.cost_price[col] = adj
+        self.trades.append((d.dates[i], code, "buy", shares, raw, value, cost, "buy"))
+        return value
+
+
+def _ranks(score_row: np.ndarray) -> np.ndarray:
+    """排名从 1 开始；没有分数的为无穷大（视为不在股票池）。"""
+    ranks = np.full(score_row.shape, np.inf)
+    valid = np.flatnonzero(~np.isnan(score_row))
+    order = valid[np.argsort(-score_row[valid], kind="stable")]
+    ranks[order] = np.arange(1, len(order) + 1)
+    return ranks
+
+
+def run_account(data: MarketData, rules: AccountRules = AccountRules(), exposure: pd.Series | None = None) -> AccountResult:
+    acct = _Account(data, rules)
+    marks = pd.DataFrame(data.adj_close).ffill().to_numpy()  # 估值用：停牌沿用最后一个价格
+    rows = [(data.dates[0], acct.cash, acct.cash, 0.0, 0, rules.n_hold, 0.0, 0, 0)]
+
+    for i in range(1, len(data.dates)):
+        s = i - 1
+        acct.day_cost, acct.n_buys, acct.n_sells = 0.0, 0, 0
+        ranks = _ranks(data.score[s])
+        tradable_today = ~np.isnan(data.adj_close[i]) & ~np.isnan(data.raw_close[i])
+
+        # 1. 卖
+        for col in list(acct.units):
+            if ranks[col] > rules.sell_rank and data.can_sell[s, col] and tradable_today[col]:
+                acct.sell(i, col, "rank")
+
+        # 2. 买
+        slot_limit = rules.n_hold
+        empty = slot_limit - len(acct.units)
+        if empty > 0:
+            nav = acct.cash + sum(acct.value_of(c, marks[i]) for c in acct.units)
+            budget = min(acct.cash / empty, nav * rules.max_stock_weight)
+            industry_value: dict[object, float] = {}
+            if data.industry is not None:
+                for c in acct.units:
+                    ind = data.industry[s, c]
+                    industry_value[ind] = industry_value.get(ind, 0.0) + acct.value_of(c, marks[i])
+            bought = 0
+            for col in np.argsort(ranks, kind="stable"):
+                if bought >= empty or not np.isfinite(ranks[col]):
+                    break
+                if col in acct.units or not data.can_buy[s, col] or not tradable_today[col]:
+                    continue
+                ind = None if data.industry is None else data.industry[s, col]
+                if ind is not None:
+                    shares = lot_shares(min(budget, acct.cash), data.raw_close[i, col], data.instruments[col])
+                    if (industry_value.get(ind, 0.0) + shares * data.raw_close[i, col]) > nav * rules.max_industry_weight:
+                        continue
+                value = acct.buy(i, col, budget)
+                if value > 0:
+                    bought += 1
+                    if ind is not None:
+                        industry_value[ind] = industry_value.get(ind, 0.0) + value
+
+        # 3. 记账
+        stock_value = sum(acct.value_of(c, marks[i]) for c in acct.units)
+        rows.append((data.dates[i], acct.cash + stock_value, acct.cash, stock_value, len(acct.units), slot_limit,
+                     acct.day_cost, acct.n_buys, acct.n_sells))
+
+    daily = pd.DataFrame(rows, columns=["date", "nav", "cash", "stock_value", "n_holdings", "slot_limit", "cost",
+                                        "n_buys", "n_sells"]).set_index("date")
+    return AccountResult(daily=daily, trades=pd.DataFrame(acct.trades, columns=_TRADE_COLUMNS))
