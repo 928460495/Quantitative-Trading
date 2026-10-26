@@ -202,3 +202,54 @@ def test_stop_loss_disabled():
     rules = AccountRules(n_hold=1, sell_rank=3, max_stock_weight=1.0, stop_loss=None, drawdown_stop=None)
     t = _stop_trades([10.0, 10.0, 5.0, 5.0], rules=rules)
     assert (t["side"] == "sell").sum() == 0
+
+
+# ---------- 任务 5：仓位控制 ----------
+
+from qt.account import trend_exposure  # noqa: E402
+
+
+def test_trend_exposure():
+    close = pd.Series([1.0, 2.0, 3.0, 4.0, 3.0, 2.0, 1.0, 5.0], index=pd.bdate_range("2019-01-02", periods=8))
+    out = trend_exposure(close, window=3, low=0.5)
+    # 3 日均线：NaN, NaN, 2, 3, 3.33, 3, 2, 2.67
+    assert list(out) == [1.0, 1.0, 1.0, 1.0, 0.5, 0.5, 0.5, 1.0]
+
+
+FOUR = {c: [s] * 6 for c, s in zip("ABCDE", [4, 3, 2, 1, 0])}
+POS = AccountRules(n_hold=4, sell_rank=10, max_stock_weight=0.25, stop_loss=None, drawdown_stop=None)
+
+
+def _exposure(values):
+    return pd.Series(values, index=pd.bdate_range("2019-01-02", periods=len(values)))
+
+
+def test_exposure_half_sells_lowest_ranked():
+    res = run_account(_scenario(FOUR, 6), POS, exposure=_exposure([1, 1, 0.5, 0.5, 0.5, 0.5]))
+    sells = res.trades[res.trades["side"] == "sell"]
+    assert sorted(sells["instrument"]) == ["C", "D"] and set(sells["reason"]) == {"exposure"}
+    assert sells["date"].iloc[0] == pd.Timestamp("2019-01-07")   # 第 2 天的信号，第 3 天卖
+    assert res.daily["slot_limit"].iloc[3] == 2
+
+
+def test_exposure_zero_with_limit_down_holding():
+    can_sell = {c: [True] * 6 for c in FOUR} | {"A": [True, True, False, True, True, True]}
+    res = run_account(_scenario(FOUR, 6, can_sell=can_sell), POS, exposure=_exposure([1, 1, 0, 0, 0, 0]))
+    sells = res.trades[res.trades["side"] == "sell"].set_index("instrument")
+    assert sells.loc["A", "date"] == pd.Timestamp("2019-01-08")  # 跌停晚一天卖
+    assert sorted(sells.index) == ["A", "B", "C", "D"]
+    assert (res.daily["slot_limit"].iloc[3:] == 0).all() and (res.daily["n_holdings"].iloc[-1] == 0)
+
+
+def test_drawdown_stop_liquidates_and_waits_for_fresh_signal():
+    rules = AccountRules(n_hold=1, sell_rank=3, max_stock_weight=1.0, stop_loss=None, drawdown_stop=0.20)
+    path = [10.0, 10.0, 7.9, 7.9, 7.9, 7.9, 7.9, 7.9, 7.9, 6.5]
+    exposure = _exposure([1, 1, 1, 1, 1, 1, 0, 1, 1, 1])
+    res = run_account(_scenario({"A": [1.0] * 10}, 10, prices={"A": path}), rules, exposure=exposure)
+    dates = pd.bdate_range("2019-01-02", periods=10)
+    t = res.trades
+    assert list(t["side"]) == ["buy", "sell", "buy"]
+    assert t["reason"].iloc[1] == "drawdown" and t["date"].iloc[1] == dates[3]   # 第 2 天净值跌超 20%，第 3 天全卖
+    assert t["date"].iloc[2] == dates[8]          # 均线信号先变空（第 6 天）再变满（第 7 天），第 8 天才回来
+    assert (res.daily["slot_limit"].iloc[3:8] == 0).all()
+    assert res.daily["n_holdings"].iloc[-1] == 1  # 回来后最高点已重置，再跌 18% 不会触发

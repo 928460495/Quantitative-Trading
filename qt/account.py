@@ -151,9 +151,23 @@ def _ranks(score_row: np.ndarray) -> np.ndarray:
     return ranks
 
 
+def trend_exposure(index_close: pd.Series, window: int, low: float) -> pd.Series:
+    """大盘趋势过滤（说明书第 6 节 A）：收盘价在 window 日均线上为 1，跌破为 low；均线还算不出时为 1。"""
+    ma = index_close.rolling(window).mean()
+    return pd.Series(np.where(ma.isna() | (index_close >= ma), 1.0, low), index=index_close.index)
+
+
 def run_account(data: MarketData, rules: AccountRules = AccountRules(), exposure: pd.Series | None = None) -> AccountResult:
+    """exposure：信号日 → 持股比例（缺失按 1），位置上限 = floor(n_hold × exposure)。
+
+    账户回撤兜底：信号日净值比历史最高跌了 drawdown_stop，第二天起全部卖出、位置上限为 0；
+    等 exposure 先出现 < 1 再出现 = 1 才恢复，最高点重置为恢复时的净值。不传 exposure 时触发后不会恢复。
+    """
     acct = _Account(data, rules)
     marks = pd.DataFrame(data.adj_close).ffill().to_numpy()  # 估值用：停牌沿用最后一个价格
+    exp = np.ones(len(data.dates)) if exposure is None else exposure.reindex(data.dates).fillna(1.0).to_numpy(float)
+    navs = [acct.cash]
+    peak, halted, seen_out = acct.cash, False, False
     rows = [(data.dates[0], acct.cash, acct.cash, 0.0, 0, rules.n_hold, 0.0, 0, 0)]
 
     for i in range(1, len(data.dates)):
@@ -162,18 +176,35 @@ def run_account(data: MarketData, rules: AccountRules = AccountRules(), exposure
         ranks = _ranks(data.score[s])
         tradable_today = ~np.isnan(data.adj_close[i]) & ~np.isnan(data.raw_close[i])
 
-        # 1. 卖：先止损，再按排名
+        # 0. 仓位：回撤兜底的状态和位置上限，都只看信号日
+        if not halted:
+            peak = max(peak, navs[s])
+            if rules.drawdown_stop is not None and navs[s] <= peak * (1 - rules.drawdown_stop):
+                halted, seen_out = True, False
+        elif exp[s] < 1:
+            seen_out = True
+        elif seen_out:
+            halted, peak = False, navs[s]
+        slot_limit = 0 if halted else int(np.floor(rules.n_hold * exp[s] + 1e-9))
+
+        # 1. 卖：回撤兜底 → 止损 → 排名 → 仓位上限（多出来的按排名从低到高卖）
         for col in list(acct.units):
             if not (data.can_sell[s, col] and tradable_today[col]):
                 continue
-            if rules.stop_loss is not None and marks[s, col] <= acct.cost_price[col] * (1 - rules.stop_loss):
+            if halted:
+                acct.sell(i, col, "drawdown")
+            elif rules.stop_loss is not None and marks[s, col] <= acct.cost_price[col] * (1 - rules.stop_loss):
                 acct.sell(i, col, "stop")
                 acct.cooldown_until[col] = i + rules.cooldown_days
             elif ranks[col] > rules.sell_rank:
                 acct.sell(i, col, "rank")
+        for col in sorted(acct.units, key=lambda c: -ranks[c]):
+            if len(acct.units) <= slot_limit:
+                break
+            if data.can_sell[s, col] and tradable_today[col]:
+                acct.sell(i, col, "exposure")
 
         # 2. 买
-        slot_limit = rules.n_hold
         empty = slot_limit - len(acct.units)
         if empty > 0:
             nav = acct.cash + sum(acct.value_of(c, marks[i]) for c in acct.units)
@@ -204,6 +235,7 @@ def run_account(data: MarketData, rules: AccountRules = AccountRules(), exposure
 
         # 3. 记账
         stock_value = sum(acct.value_of(c, marks[i]) for c in acct.units)
+        navs.append(acct.cash + stock_value)
         rows.append((data.dates[i], acct.cash + stock_value, acct.cash, stock_value, len(acct.units), slot_limit,
                      acct.day_cost, acct.n_buys, acct.n_sells))
 
