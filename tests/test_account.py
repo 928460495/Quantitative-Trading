@@ -161,3 +161,44 @@ def test_nav_uses_adjusted_price_for_dividends():
     raw = {"A": [10.0, 10.0, 9.5, 9.5]}                      # 第 3 天除息，未复权价跌、复权价不变
     res = run_account(_scenario({"A": [1] * 4}, 4, prices=adj, raw=raw), rules)
     assert res.daily["nav"].iloc[1] == pytest.approx(res.daily["nav"].iloc[3])
+
+
+# ---------- 任务 4：个股止损和冷却期 ----------
+
+STOP = AccountRules(n_hold=1, sell_rank=3, max_stock_weight=1.0, stop_loss=0.20, cooldown_days=3, drawdown_stop=None)
+
+
+def _stop_trades(path, rules=STOP, can_sell=None):
+    n = len(path)
+    res = run_account(_scenario({"A": [2.0] * n, "B": [1.0] * n}, n, prices={"A": path, "B": [10.0] * n},
+                                can_sell=can_sell), rules)
+    return res.trades
+
+
+def test_stop_loss_sells_next_day():
+    t = _stop_trades([10.0, 10.0, 7.99, 7.99, 7.99])       # 第 1 天按 10 元买入；第 2 天收盘跌 20.1%
+    sells = t[t["side"] == "sell"]
+    assert list(sells["reason"]) == ["stop"] and sells["date"].iloc[0] == pd.Timestamp("2019-01-07")  # 第 3 个交易日卖
+    t2 = _stop_trades([10.0, 10.0, 8.01, 8.01, 8.01])      # 跌 19.9%：不卖
+    assert (t2["side"] == "sell").sum() == 0
+
+
+def test_stopped_stock_not_rebought_within_cooldown():
+    path = [10.0, 10.0, 7.99] + [7.99] * 6
+    res = run_account(_scenario({"A": [1.0] * 9}, 9, prices={"A": path}), STOP)
+    a_buys = res.trades[res.trades["side"] == "buy"]["date"]
+    dates = pd.bdate_range("2019-01-02", periods=9)
+    assert list(a_buys) == [dates[1], dates[7]]             # 第 3 天卖出，冷却 3 天（第 4–6 天），第 7 天才能买回
+
+
+def test_stop_loss_blocked_by_limit_down_retries():
+    can_sell = {"A": [True, True, False, True, True], "B": [True] * 5}
+    t = _stop_trades([10.0, 10.0, 7.99, 7.5, 7.5], can_sell=can_sell)
+    sells = t[t["side"] == "sell"]
+    assert list(sells["reason"]) == ["stop"] and sells["date"].iloc[0] == pd.Timestamp("2019-01-08")  # 晚一天
+
+
+def test_stop_loss_disabled():
+    rules = AccountRules(n_hold=1, sell_rank=3, max_stock_weight=1.0, stop_loss=None, drawdown_stop=None)
+    t = _stop_trades([10.0, 10.0, 5.0, 5.0], rules=rules)
+    assert (t["side"] == "sell").sum() == 0

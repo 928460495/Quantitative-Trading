@@ -99,6 +99,7 @@ class _Account:
         self.units: dict[int, float] = {}
         self.cost_price: dict[int, float] = {}
         self.trades: list[tuple] = []
+        self.cooldown_until: dict[int, int] = {}  # 止损卖出后，到这一天（含）为止不能买回
         self.day_cost = 0.0
         self.n_buys = self.n_sells = 0
 
@@ -161,9 +162,14 @@ def run_account(data: MarketData, rules: AccountRules = AccountRules(), exposure
         ranks = _ranks(data.score[s])
         tradable_today = ~np.isnan(data.adj_close[i]) & ~np.isnan(data.raw_close[i])
 
-        # 1. 卖
+        # 1. 卖：先止损，再按排名
         for col in list(acct.units):
-            if ranks[col] > rules.sell_rank and data.can_sell[s, col] and tradable_today[col]:
+            if not (data.can_sell[s, col] and tradable_today[col]):
+                continue
+            if rules.stop_loss is not None and marks[s, col] <= acct.cost_price[col] * (1 - rules.stop_loss):
+                acct.sell(i, col, "stop")
+                acct.cooldown_until[col] = i + rules.cooldown_days
+            elif ranks[col] > rules.sell_rank:
                 acct.sell(i, col, "rank")
 
         # 2. 买
@@ -182,6 +188,8 @@ def run_account(data: MarketData, rules: AccountRules = AccountRules(), exposure
                 if bought >= empty or not np.isfinite(ranks[col]):
                     break
                 if col in acct.units or not data.can_buy[s, col] or not tradable_today[col]:
+                    continue
+                if acct.cooldown_until.get(col, -1) >= i:
                     continue
                 ind = None if data.industry is None else data.industry[s, col]
                 if ind is not None:
