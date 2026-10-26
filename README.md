@@ -45,6 +45,15 @@ python scripts/run_single_factor.py --factors rev20 vol20
 python scripts/run_single_factor.py --neutralize   # 写到 reports/single_factor/<股票池>_<样本段>_neutral/
 ```
 
+### Alpha158 与筛选
+
+```bash
+python scripts/run_single_factor.py --neutralize --set alpha158 --primary-only --details passed --jobs 4
+python scripts/screen_factors.py   # 合并文献因子和 Alpha158 的结果，按相关性去冗余
+```
+
+Alpha158 的结果写到 `reports/single_factor/<股票池>_<样本段>_neutral_alpha158/`，只给通过的因子写详细报告；筛选结果写到 `reports/screening/`，最终名单是其中的 `selected.csv`。
+
 ## 最终测试段封存
 
 最终测试段（2022 年至今）在研究流程走完之前不能读取。`qt/config.py` 里的 `check_range()` 会拦住任何碰到测试段的取数请求。只有最后做一次最终测试时，才设置 `QT_UNLOCK_TEST=1`。
