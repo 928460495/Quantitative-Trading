@@ -89,12 +89,27 @@ def collect_industry(ak, retries: int = 3, pause: float = 1.0, file: Path | None
     print(f"  {len(df)} 条记录，{df['symbol'].nunique()} 只股票，"
           f"{df['start_date'].min().date()} ~ {df['start_date'].max().date()}")
     print(f"  行业代码长度分布：{df['industry_code'].str.len().value_counts().to_dict()}")
-    print(f"  按前两位归类得到 {level1.nunique()} 个一级行业（申万 2021 版应为 31 个）：{sorted(level1.unique())}")
+    # 变动历史里有三套申万分类：2014-02-21 之前的旧版（23 个一级行业）、2014 版（28 个）、2021-07-30 起的 2021 版（31 个）
+    for label, day in (("2013-12-31（旧版）", "2013-12-31"), ("2018-12-31（2014 版）", "2018-12-31"), ("最新（2021 版）", None)):
+        snap = df if day is None else df[df["start_date"] <= day]
+        latest = snap.sort_values("start_date").groupby("symbol").tail(1)
+        print(f"  {label}：当时在用的一级行业 {latest['industry_code'].map(industry_level1).nunique()} 个")
+    print(f"  所有年份合计出现过 {level1.nunique()} 个一级行业代码（三套分类加起来，不是错误）")
     return df
 
 
 def _fetch_one(ak, symbol: str, end: str, retries: int, pause: float) -> pd.DataFrame:
-    return _retry(lambda: ak.stock_share_change_cninfo(symbol=symbol, start_date="19900101", end_date=end), symbol, retries, pause)
+    def call() -> pd.DataFrame:
+        try:
+            return ak.stock_share_change_cninfo(symbol=symbol, start_date="19900101", end_date=end)
+        except KeyError as e:
+            # 巨潮没有这只股票的记录（退市公司常见）时返回空表，AkShare 取"公告日期"列会报 KeyError。
+            # 这是数据源没有，不是网络问题，重试也没用，记为无记录
+            if "公告日期" in str(e):
+                return pd.DataFrame()
+            raise
+
+    return _retry(call, symbol, retries, pause)
 
 
 def collect_shares(ak, symbols: list[str], pause: float, retries: int) -> tuple[pd.DataFrame, dict[str, str]]:

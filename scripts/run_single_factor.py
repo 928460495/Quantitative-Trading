@@ -24,7 +24,7 @@ from qt.data import drop_embargo, load_features  # noqa: E402
 from qt.evaluate import REJECTED, SCORING, VETO, evaluate_factor  # noqa: E402
 from qt.external import float_shares_on, industry_on, load_external  # noqa: E402
 from qt.factors import HORIZONS, LITERATURE, MAIN_HORIZON, forward_return_expr  # noqa: E402
-from qt.neutralize import neutralize  # noqa: E402
+from qt.neutralize import MIN_INDUSTRY_SIZE, impute_log_mcap, neutralize  # noqa: E402
 from qt.preprocess import standardize  # noqa: E402
 from qt.report import summary_row, write_factor_report  # noqa: E402
 from qt.simulate import COMPARISON_RULES, PRIMARY_RULE  # noqa: E402
@@ -51,6 +51,7 @@ def main() -> None:
     exprs |= {f"ret{h}": forward_return_expr(h) for h in HORIZONS}
     exprs |= FILTER_EXPRS
     exprs["_raw_close"] = "$close/$factor"
+    exprs["_log_amount20"] = "Log(Mean($amount,20))"
 
     print(f"读取 {args.market} {start} ~ {end} ...")
     df = drop_embargo(load_features(exprs, args.market, start, end), MAX_FORWARD_DAYS)
@@ -58,8 +59,13 @@ def main() -> None:
     can_sell = sellable_mask(df)
     n_days = df.index.get_level_values("datetime").nunique()
     if args.neutralize:
-        industry, log_mcap, coverage = _exposures(df)
-        neutral_note = f"已对申万一级行业和对数流通市值做中性化，行业和市值都有数据的样本占 {coverage:.1%}"
+        industry, log_mcap, coverage, quality = _exposures(df)
+        neutral_note = (
+            f"已对申万一级行业（当天不足 {MIN_INDUSTRY_SIZE} 只的行业合并为“其他”）和对数流通市值做中性化；"
+            f"行业和市值都有数据的样本占 {coverage:.1%}，其中 {quality['imputed_share']:.1%} 的市值缺股本数据、"
+            f"用对数 20 日平均成交额估算（估算值与真实值的每日相关系数平均 {quality['fit_corr_mean']:.2f}、"
+            f"最低 {quality['fit_corr_min']:.2f}）"
+        )
     else:
         neutral_note = "未做行业和市值中性化"
     context = (
@@ -91,7 +97,8 @@ def main() -> None:
                 "single_factor",
                 {"factor": f.name, "expr": f.expr, "direction": res.direction, "market": args.market,
                  "segment": args.segment, "horizon": MAIN_HORIZON, "rule": rule.label,
-                 "benchmark": "buyable", "neutralized": args.neutralize, "data_version": _data_version()},
+                 "benchmark": "buyable", "neutralized": args.neutralize, "data_version": _data_version(),
+                 **({"min_industry_size": MIN_INDUSTRY_SIZE, "size_imputation": "log_amount20"} if args.neutralize else {})},
                 {"rank_ic": res.rank_ic[MAIN_HORIZON]["mean"], "t_nw": res.rank_ic[MAIN_HORIZON]["t_nw"],
                  **res.sim_summary[rule.label], "category": res.category},
             )
@@ -106,13 +113,15 @@ def main() -> None:
     print(f"试验日志里不同配置的单因子试验共 {count_unique(kind='single_factor')} 个")
 
 
-def _exposures(df: pd.DataFrame) -> tuple[pd.Series, pd.Series, float]:
+def _exposures(df: pd.DataFrame) -> tuple[pd.Series, pd.Series, float, dict[str, float]]:
+    """行业、对数流通市值（缺股本的用成交额估算）、覆盖率、估算质量。"""
     ind_table, share_table = load_external()
     industry = industry_on(df.index, ind_table)
     shares = float_shares_on(df.index, share_table)
-    log_mcap = np.log(df["_raw_close"] * shares)
+    log_amount = df["_log_amount20"].replace([np.inf, -np.inf], np.nan)
+    log_mcap, quality = impute_log_mcap(np.log(df["_raw_close"] * shares), log_amount)
     coverage = float((industry.notna() & log_mcap.notna()).mean())
-    return industry, log_mcap, coverage
+    return industry, log_mcap, coverage, quality
 
 
 def _comparison(summary: pd.DataFrame, baseline: pd.DataFrame) -> list[str]:

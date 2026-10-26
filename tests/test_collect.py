@@ -97,3 +97,16 @@ def test_industry_download_failure_does_not_stop(dirs, capsys):
     assert collect.collect_industry(Broken(), retries=1, pause=0) is None
     out = capsys.readouterr().out
     assert "StockClassifyUse_stock.xls" in out and "--industry-file" in out
+
+
+def test_empty_cninfo_response_counts_as_no_records(dirs):
+    class Delisted(FakeAk):
+        def stock_share_change_cninfo(self, symbol, start_date, end_date):
+            self.calls[symbol] = self.calls.get(symbol, 0) + 1
+            raise KeyError("公告日期")  # AkShare 处理空表时的报错
+
+    ak = Delisted()
+    shares, failed = collect.collect_shares(ak, ["000024"], pause=0, retries=3)
+    assert ak.calls == {"000024": 1}  # 不重试
+    assert not failed
+    assert (dirs / "cache" / "000024.csv").exists()  # 记为无记录，重跑时不再请求
