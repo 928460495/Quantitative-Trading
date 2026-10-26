@@ -4,12 +4,18 @@
 
 ## 怎么采集
 
+采集只需要 pandas 和 AkShare，不用装 Qlib。Python 3.10 及以上的正式版都可以（不要用 3.12 的 alpha / beta 测试版）。
+
 ```bash
-python3.12 -m venv .venv && source .venv/bin/activate
+python --version                          # 确认是正式版，例如 Python 3.12.7
+python -m venv .venv && source .venv/bin/activate
+python -m pip install --upgrade pip
 pip install -r requirements-collect.txt
-python scripts/download_data.py          # 已经有 Qlib 数据就跳过；采集脚本要从这里读股票名单
-python scripts/collect_external.py       # 沪深300 历史上的全部成分股，约 20–30 分钟
+python scripts/download_data.py           # 已经有 Qlib 数据就跳过；采集脚本要从这里读股票名单
+python scripts/collect_external.py        # 沪深300 历史上的全部成分股，约 20–30 分钟
 ```
+
+用 conda 的话，把前两行换成 `conda create -n qt python=3.12 -y && conda activate qt`。
 
 中途断了直接重跑：已下载的股票会跳过，失败的会补。跑完检查屏幕上打印的两行：
 
