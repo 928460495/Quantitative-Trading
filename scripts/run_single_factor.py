@@ -164,6 +164,15 @@ def _write_index(summary: pd.DataFrame, out_dir: Path, context: str, baseline: p
     ]
     if baseline is not None:
         lines += _comparison(summary, baseline)
+    if "neutral" in out_dir.name:
+        lines += [
+            "## 说明",
+            "",
+            "- 市值估算质量低于事先约定的 0.8，按 docs/DECISIONS.md（2026-10-26）保留估算并如实报告",
+            "- pv_corr20 为**临界**：缺市值改用当天平均值时它是打分因子，用成交额估算时是排雷因子，"
+            "扣成本后的收益贴近 0；到因子合成阶段由验证段检验",
+            "",
+        ]
     (out_dir / "README.md").write_text("\n".join(lines))
 
 
