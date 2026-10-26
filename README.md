@@ -54,6 +54,14 @@ python scripts/screen_factors.py   # 合并文献因子和 Alpha158 的结果，
 
 Alpha158 的结果写到 `reports/single_factor/<股票池>_<样本段>_neutral_alpha158/`，只给通过的因子写详细报告；筛选结果写到 `reports/screening/`，最终名单是其中的 `selected.csv`。
 
+## 因子合成与回测
+
+```bash
+python scripts/run_combination.py
+```
+
+读筛选后的最终名单，训练段估权重，验证段上按"等权 → ICIR → 最大化 ICIR → 线性回归 → LightGBM"逐级比较，再试信号平滑和排雷比例，跑对照基准 Alpha158 + LightGBM 和 Qlib 正式回测（`qt/backtest.py` 里的缓冲规则策略），最后算通缩夏普比率。结果写到 `reports/combination/<股票池>_valid/`。因子分数缓存在 `data/cache/`（不进仓库），换了数据或代码要重算时加 `--refresh`。
+
 ## 最终测试段封存
 
 最终测试段（2022 年至今）在研究流程走完之前不能读取。`qt/config.py` 里的 `check_range()` 会拦住任何碰到测试段的取数请求。只有最后做一次最终测试时，才设置 `QT_UNLOCK_TEST=1`。
@@ -68,7 +76,7 @@ pytest -q -m "not data"   # 不需要数据包的部分
 ## 目录
 
 ```text
-qt/          研究代码（配置、取数……）
+qt/          研究代码（配置、取数、因子、检验、中性化、合成、回测……）
 scripts/     下载数据、检查数据等命令行工具
 tests/       测试
 docs/        决策记录、数据笔记
