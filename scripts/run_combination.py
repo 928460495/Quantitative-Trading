@@ -253,6 +253,18 @@ def main() -> None:
     _, chosen_metrics = evaluate(chosen_score, valid, buy_ok[VETO_SHARE])
     veto_rows.insert(0, {"veto_share": VETO_SHARE, **chosen_metrics, "diff_ann": np.nan, "diff_t": np.nan})
 
+    # 排雷在训练段（样本内）上的同样对照：区分"验证段运气不好"和"排雷的用法本身有问题"
+    train_score = combine.smooth(method_score(chosen_method, train["scores"][scoring], weights, model), smoothing)
+    train_veto = combine.composite(train["scores"][veto], combine.equal_weights(veto))
+    train_veto_rows, train_sims = [], {}
+    for share in (VETO_SHARE, *VETO_COMPARISONS):
+        ok = train["can_buy"] & ~combine.veto_block(train_veto, share)
+        train_sims[share], metrics = evaluate(train_score, train, ok)
+        log_trial("combination", params | {"segment": "train", "method": chosen_method, "smoothing": smoothing,
+                                           "veto_share": share}, metrics)
+        diff = compare(train_sims[share], train_sims[VETO_SHARE]) if share != VETO_SHARE else {"diff_ann": np.nan, "diff_t": np.nan}
+        train_veto_rows.append({"veto_share": share, **metrics, **diff})
+
     # 6. 对照基准
     print("对照基准 Alpha158 + LightGBM ...")
     bkey = {"market": args.market, "data_version": version}
@@ -280,6 +292,12 @@ def main() -> None:
     # 8. 通缩夏普比率
     n_train = train["ret1"].index.get_level_values("datetime").nunique()
     dsr = _dsr(chosen_sim["net"], n_train)
+    dsr_comb = _dsr(chosen_sim["net"], n_train, kinds=("combination", "baseline"))
+    yearly = pd.DataFrame({
+        "相对能买的股票（近似模拟）": chosen_sim["net"].groupby(chosen_sim.index.year).mean() * TRADING_DAYS,
+        "相对沪深300（Qlib）": _excess(reports["选定方案"]).groupby(reports["选定方案"].index.year).mean() * TRADING_DAYS,
+    })
+    yearly.index.name = "年份"
 
     out_dir = ROOT / "reports" / "combination" / f"{args.market}_valid"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -293,15 +311,24 @@ def main() -> None:
     (out_dir / "chosen.json").write_text(json.dumps(chosen_cfg, ensure_ascii=False, indent=2))
     _plots(sims, chosen_sim, base_sim, reports, out_dir)
     _write_report(out_dir, args, scoring, veto, weight_table, best_iter, b_iter, ladder, chosen, veto_rows,
-                  base_metrics, chosen_metrics, bt, reports, chosen_sim, dsr)
+                  train_veto_rows, base_metrics, chosen_metrics, bt, reports, chosen_sim, dsr, dsr_comb, yearly)
     print(bt.round(4).to_string())
     print(f"选定：{chosen}；DSR {dsr['dsr']:.3f}；试验共 {dsr['n_trials']} 个")
 
 
-def _dsr(net: pd.Series, n_train: int) -> dict:
-    """试验次数和夏普方差取自试验日志。旧的单因子试验没记 sharpe_ann，用 t 值换算（都在训练段上）。"""
+def _excess(report: pd.DataFrame) -> pd.Series:
+    return report["return"] - report["cost"] - report["bench"]
+
+
+def _dsr(net: pd.Series, n_train: int, kinds: tuple[str, ...] | None = None) -> dict:
+    """试验次数和夏普方差取自试验日志（kinds 不为 None 时只用这几类）。
+
+    旧的单因子试验没记 sharpe_ann，用 t 值换算（都在训练段上）。
+    """
     sharpes = []
     for r in load_unique():
+        if kinds is not None and r["kind"] not in kinds:
+            continue
         m = r["metrics"]
         if "sharpe_ann" in m:
             sharpes.append(m["sharpe_ann"])
@@ -309,7 +336,7 @@ def _dsr(net: pd.Series, n_train: int) -> dict:
             sharpes.append(m["net_t"] / np.sqrt(n_train) * np.sqrt(TRADING_DAYS))
     sharpes = np.array([s for s in sharpes if np.isfinite(s)])
     out = deflated_sharpe(net.to_numpy(), len(sharpes), sharpes.var(ddof=1) / TRADING_DAYS)
-    return out | {"n_trials": len(sharpes), "sharpe_ann": out["sharpe"] * np.sqrt(TRADING_DAYS),
+    return out | {"n_trials": len(sharpes), "sharpe_ann": out["sharpe"] * np.sqrt(TRADING_DAYS), "net_t": newey_west_t(net, lag=0),
                   "threshold_ann": out["sharpe_threshold"] * np.sqrt(TRADING_DAYS), "sharpe_std_ann": sharpes.std(ddof=1)}
 
 
@@ -330,8 +357,7 @@ def _plots(sims, chosen_sim, base_sim, reports, out_dir: Path) -> None:
               "对照基准 Alpha158 + LightGBM": "Alpha158+LGBM"}
     fig, ax = plt.subplots(figsize=(9, 4))
     for name, rep in reports.items():
-        excess = rep["return"] - rep["cost"] - rep["bench"]
-        excess.cumsum().plot(ax=ax, label=labels.get(name, "chosen, TopkDropout"))
+        _excess(rep).cumsum().plot(ax=ax, label=labels.get(name, "chosen, TopkDropout"))
     ax.set_title("Qlib backtest (validation): cumulative net excess vs CSI 300 index")
     ax.axhline(0, color="grey", lw=0.5)
     ax.legend(fontsize=8)
@@ -344,8 +370,19 @@ def _pct(x) -> str:
     return "" if pd.isna(x) else f"{x:.2%}"
 
 
+def _veto_table(rows: list[dict]) -> pd.DataFrame:
+    vt = pd.DataFrame(rows)
+    return pd.DataFrame({
+        "排雷比例": vt["veto_share"].map(lambda v: f"{v:.0%}" if v else "不排雷"),
+        "RankIC": vt["rank_ic"].map("{:.4f}".format),
+        "年化超额": vt["excess_ann"].map(_pct), "成本": vt["cost_ann"].map(_pct), "扣成本后": vt["net_ann"].map(_pct),
+        "日均换手": vt["turnover"].map(_pct), f"和 {VETO_SHARE:.0%} 的差距": vt["diff_ann"].map(_pct),
+        "差距 t 值": vt["diff_t"].map(lambda v: "" if pd.isna(v) else f"{v:.2f}"),
+    })
+
+
 def _write_report(out_dir, args, scoring, veto, weight_table, best_iter, b_iter, ladder, chosen, veto_rows,
-                  base_metrics, chosen_metrics, bt, reports, chosen_sim, dsr) -> None:
+                  train_veto_rows, base_metrics, chosen_metrics, bt, reports, chosen_sim, dsr, dsr_comb, yearly) -> None:
     start, end = chosen_sim.index.min().date(), chosen_sim.index.max().date()
 
     lad = pd.DataFrame({
@@ -363,15 +400,6 @@ def _write_report(out_dir, args, scoring, veto, weight_table, best_iter, b_iter,
         "结果": ladder["adopted"].map({True: "采用", False: "不升级"}),
     })
     lad.iloc[0, -1] = "起点"
-
-    vt = pd.DataFrame(veto_rows)
-    vt = pd.DataFrame({
-        "排雷比例": vt["veto_share"].map(lambda v: f"{v:.0%}" if v else "不排雷"),
-        "验证段 RankIC": vt["rank_ic"].map("{:.4f}".format),
-        "年化超额": vt["excess_ann"].map(_pct), "成本": vt["cost_ann"].map(_pct), "扣成本后": vt["net_ann"].map(_pct),
-        "日均换手": vt["turnover"].map(_pct), "和 20% 的差距": vt["diff_ann"].map(_pct),
-        "差距 t 值": vt["diff_t"].map(lambda v: "" if pd.isna(v) else f"{v:.2f}"),
-    })
 
     bt_show = pd.DataFrame({
         "年化收益": bt["return_ann"].map(_pct), "沪深300": bt["bench_ann"].map(_pct), "年化超额": bt["excess_ann"].map(_pct),
@@ -417,7 +445,13 @@ def _write_report(out_dir, args, scoring, veto, weight_table, best_iter, b_iter,
         "",
         "## 排雷比例对照",
         "",
-        vt.to_markdown(index=False),
+        "验证段：",
+        "",
+        _veto_table(veto_rows).to_markdown(index=False),
+        "",
+        "同样的对照放在训练段（样本内，权重也是在这一段估的）上：",
+        "",
+        _veto_table(train_veto_rows).to_markdown(index=False),
         "",
         "## 对照基准：Alpha158 + LightGBM",
         "",
@@ -435,13 +469,22 @@ def _write_report(out_dir, args, scoring, veto, weight_table, best_iter, b_iter,
         f"和近似模拟对照：选定方案扣成本前的年化收益，近似模拟 {sim_gross:.2%}，Qlib {qlib_gross:.2%}。",
         "相对沪深300 指数的超额，比相对能买股票的超额多了等权和市值加权的差、以及买不进涨停股的损失，两者不能直接比。",
         "",
+        "## 分年度",
+        "",
+        "选定方案扣成本后的年化超额：",
+        "",
+        yearly.map(_pct).to_markdown(),
+        "",
         "## 通缩夏普比率",
         "",
-        f"- 选定方案验证段每日扣成本超额（相对能买进的股票）的年化夏普比率 {dsr['sharpe_ann']:.2f}",
+        f"- 选定方案验证段每日扣成本超额（相对能买进的股票）的年化夏普比率 {dsr['sharpe_ann']:.2f}，t 值 {dsr['net_t']:.2f}",
         f"- 试验日志里不同配置共 {dsr['n_trials']} 个，年化夏普比率的标准差 {dsr['sharpe_std_ann']:.2f}；"
         f"全是碰运气时，最好那次的年化夏普比率期望约 {dsr['threshold_ann']:.2f}",
         f"- DSR = {dsr['dsr']:.3f}（真实夏普大于 0 的概率，扣除了多次试验和收益分布的偏度、峰度；常用门槛 0.95）",
-        "- 近似：大部分试验是训练段上的单因子检验，和验证段上的合成试验放在一起估计方差",
+        "- 近似：大部分试验是训练段上的单因子检验，和验证段上的合成试验放在一起估计方差；单因子里换手很高、扣成本后大幅亏损的因子让夏普比率的离散度很大，门槛被抬得很高",
+        f"- 对照：只用合成阶段和对照基准的 {dsr_comb['n_trials']} 个试验时，年化夏普比率标准差 {dsr_comb['sharpe_std_ann']:.2f}，"
+        f"门槛约 {dsr_comb['threshold_ann']:.2f}，DSR = {dsr_comb['dsr']:.3f}",
+        "- 两种算法下都远低于 0.95：验证段这 3 年的超额在统计上还不可靠",
         "",
         "## 最终测试四条标准在验证段上的预演",
         "",
