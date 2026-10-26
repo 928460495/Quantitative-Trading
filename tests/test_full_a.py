@@ -78,9 +78,10 @@ def test_suspended_or_missing_entry_day_blocks_both():
     assert not can_buy.any() and not can_sell.any()
 
 
-def test_limit_up_uses_real_limit_for_chinext():
-    can_buy, _ = _setup([("SZ300750", 100.0, 115.0, 1, 0), ("SZ300751", 100.0, 120.0, 1, 0), ("SH600000", 10.0, 11.0, 1, 0)])
-    assert list(can_buy) == [True, False, False]
+def test_limit_up_uses_reference_preclose_on_ex_dividend_day():
+    # 除息后参考前收盘 9.50：收盘 10.45 是涨停（买不进），10.40 不是；按前一天收盘 10.00 算会判反
+    can_buy, _ = _setup([("SH600000", 9.50, 10.45, 1, 0), ("SH600001", 9.50, 10.40, 1, 0), ("SH600002", 10.0, 11.0, 1, 0)])
+    assert list(can_buy) == [False, True, False]
 
 
 def test_limit_down_blocks_sell():
@@ -98,3 +99,19 @@ def test_new_listing_and_bj_excluded():
     listed = pd.Series({"SH600000": pd.Timestamp("2020-06-01"), "BJ430047": pd.Timestamp("2010-01-04")})
     can_buy, _ = _setup([("SH600000", 10.0, 10.1, 1, 0), ("BJ430047", 10.0, 10.1, 1, 0)], listed=listed)
     assert not can_buy.any()
+
+
+def test_only_main_board_can_be_bought():
+    can_buy, can_sell = _setup([("SH600000", 10.0, 10.1, 1, 0), ("SZ002001", 10.0, 10.1, 1, 0), ("SZ001979", 10.0, 10.1, 1, 0),
+                                ("SZ300750", 10.0, 10.1, 1, 0), ("SH688001", 10.0, 10.1, 1, 0)])
+    assert list(can_buy) == [True, True, True, False, False]
+    assert can_sell.all()  # 卖出不受板块限制
+
+
+def test_liquidity_cut_ranked_within_main_board():
+    # 5 只主板 + 5 只创业板，创业板成交额最小：主板里最小的 1 只（20%）仍然被剔除
+    main = [f"SH60000{i}" for i in range(5)]
+    chinext = [f"SZ30000{i}" for i in range(5)]
+    can_buy, _ = _setup([(c, 10.0, 10.1, 1, 0) for c in main + chinext],
+                        amount20=[100.0, 200.0, 300.0, 400.0, 500.0] + [1.0] * 5)
+    assert list(can_buy[:5]) == [False, True, True, True, True]
