@@ -1,0 +1,9 @@
+{
+  "akshare_version": "1.19.3",
+  "market": "csi300",
+  "industry": {
+    "time": "2026-10-26T09:02:29+00:00",
+    "rows": 12929,
+    "source": "StockClassifyUse_stock.xls"
+  }
+}
