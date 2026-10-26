@@ -304,3 +304,22 @@ def test_account_engine_matches_qlib_backtest():
     out = check.compare()
     assert abs(out["ours"]["annual_return"] - out["qlib"]["annual_return"]) < 0.01
     assert out["daily_corr"] > 0.95
+
+
+# ---------- 最终审查发现的问题 ----------
+
+
+def test_missing_industry_is_none_not_nan():
+    d = pd.bdate_range("2019-01-02", periods=2)
+    idx = pd.MultiIndex.from_product([d, ["A", "B"]], names=["datetime", "instrument"])
+    s = pd.Series(1.0, index=idx)
+    data = market_data(s, s, s, s.astype(bool), s.astype(bool), pd.Series(["银行"], index=idx[:1]))
+    assert data.industry[0, 0] == "银行"
+    assert all(x is None for x in [data.industry[0, 1], data.industry[1, 0], data.industry[1, 1]])
+
+
+def test_exposure_without_matching_dates_is_rejected():
+    data = _scenario(FOUR, 6)
+    wrong = pd.Series(0.0, index=pd.bdate_range("2030-01-01", periods=6))
+    with pytest.raises(ValueError, match="exposure"):
+        run_account(data, POS, exposure=wrong)

@@ -67,8 +67,15 @@ def market_data(score: pd.Series, adj_close: pd.Series, raw_close: pd.Series, ca
         raw_close=_wide(raw_close.astype(float), dates, instruments, np.nan, float),
         can_buy=_wide(can_buy.astype(float), dates, instruments, 0.0, float) > 0,
         can_sell=_wide(can_sell.astype(float), dates, instruments, 0.0, float) > 0,
-        industry=None if industry is None else _wide(industry.astype(object), dates, instruments, None, object),
+        industry=None if industry is None else _industry(industry, dates, instruments),
     )
+
+
+def _industry(industry: pd.Series, dates: pd.DatetimeIndex, instruments: pd.Index) -> np.ndarray:
+    """缺失的行业统一为 None（不受行业上限限制），不能留 NaN：NaN 会被当成同一个"行业"。"""
+    arr = industry.astype(object).unstack("instrument").reindex(index=dates, columns=instruments).to_numpy(dtype=object, copy=True)
+    arr[pd.isna(arr)] = None
+    return arr
 
 
 def lot_shares(budget: float, raw_price: float, instrument: str) -> int:
@@ -170,6 +177,8 @@ def run_account(data: MarketData, rules: AccountRules = AccountRules(), exposure
     raw_marks = pd.DataFrame(data.raw_close).ffill().to_numpy()
     has_price = ~np.isnan(data.adj_close)
     last_price_day = np.where(has_price.any(axis=0), len(data.dates) - 1 - np.argmax(has_price[::-1], axis=0), -1)
+    if exposure is not None and not exposure.index.isin(data.dates).any():
+        raise ValueError("exposure 的日期和行情对不上（全部缺失会被当成满仓，仓位控制就悄悄失效了）")
     exp = np.ones(len(data.dates)) if exposure is None else exposure.reindex(data.dates).fillna(1.0).to_numpy(float)
     navs = [acct.cash]
     peak, halted, seen_out = acct.cash, False, False
