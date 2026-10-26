@@ -110,3 +110,93 @@ def collect_daily(bs, instruments: list[str], out_dir: Path, start: str = "2009-
         status[instrument] = "ok" if len(df) else "empty"
         time.sleep(pause)
     return status
+
+
+EASTMONEY_URL = "https://datacenter-web.eastmoney.com/api/data/v1/get"
+_A_SHARE_FILTER = '(SECURITY_TYPE_CODE in ("058001001","058001008"))(TRADE_MARKET_CODE!="069001017")'
+# 表名 → （接口里的报表名，报告期字段名）；三张 DMSK 表的筛选条件沿用 AkShare
+REPORTS: dict[str, tuple[str, str]] = {
+    "income": ("RPT_DMSK_FN_INCOME", "REPORT_DATE"),
+    "balance": ("RPT_DMSK_FN_BALANCE", "REPORT_DATE"),
+    "cashflow": ("RPT_DMSK_FN_CASHFLOW", "REPORT_DATE"),
+    "yjbb": ("RPT_LICO_FN_CPD", "REPORTDATE"),
+}
+
+
+def report_dates(start: str = "2008-03-31", end: str | None = None) -> list[str]:
+    """start 到 end 之间的季末日期。"""
+    quarter_ends = pd.date_range(start, end or pd.Timestamp.today().normalize(), freq="QE")
+    return [d.strftime("%Y-%m-%d") for d in quarter_ends]
+
+
+class EmptyResult(Exception):
+    """接口说这个报告期没有数据：不是网络问题，不重试。"""
+
+
+def _fetch_report(session, name: str, report_date: str) -> pd.DataFrame:
+    report, date_field = REPORTS[name]
+    flt = f"({date_field}='{report_date}')"
+    if name != "yjbb":
+        flt = _A_SHARE_FILTER + flt
+    params = {"sortColumns": "SECURITY_CODE", "sortTypes": "1", "pageSize": "500", "pageNumber": "1",
+              "reportName": report, "columns": "ALL", "filter": flt}
+    pages, frames, page = 1, [], 1
+    while page <= pages:
+        payload = session.get(EASTMONEY_URL, params=params | {"pageNumber": str(page)}, timeout=30).json()
+        result = payload.get("result")
+        if result is None:
+            if page == 1:
+                raise EmptyResult(payload.get("message", ""))
+            raise ConnectionError(f"第 {page} 页没有数据：{payload.get('message', '')}")
+        pages = int(result["pages"])
+        frames.append(pd.DataFrame(result["data"]))
+        page += 1
+    return pd.concat(frames, ignore_index=True)
+
+
+def collect_reports(session, names: list[str], dates: list[str], out_dir: Path, retries: int = 3,
+                    pause: float = 0.5) -> dict[str, str]:
+    """每个（表，报告期）一个文件，保留接口返回的全部原始列；已存在就跳过。"""
+    status: dict[str, str] = {}
+    for name in names:
+        (out_dir / name).mkdir(parents=True, exist_ok=True)
+        for report_date in dates:
+            key, path = f"{name}/{report_date}", out_dir / name / f"{report_date}.csv"
+            if path.exists():
+                status[key] = "ok"
+                continue
+            for attempt in range(1, retries + 1):
+                try:
+                    _write_atomic(_fetch_report(session, name, report_date), path)
+                    status[key] = "ok"
+                    break
+                except EmptyResult:
+                    status[key] = "empty"
+                    break
+                except Exception as e:
+                    if attempt == retries:
+                        status[key] = f"failed: {type(e).__name__}: {e}"
+                    else:
+                        time.sleep(pause * 2**attempt)
+            time.sleep(pause)
+    return status
+
+
+INDEXES = ("H00300", "000985")  # 沪深300 全收益、中证全指
+
+
+def collect_indexes(ak, out_dir: Path, start: str = "20090101", end: str | None = None) -> dict[str, str]:
+    """指数日收盘价，存 index/<代码>.csv（列 date、close）。历史比 start 短时照实记录起始日期。"""
+    (out_dir / "index").mkdir(parents=True, exist_ok=True)
+    end = end or pd.Timestamp.today().strftime("%Y%m%d")
+    status: dict[str, str] = {}
+    for symbol in INDEXES:
+        try:
+            raw = ak.stock_zh_index_hist_csindex(symbol=symbol, start_date=start, end_date=end)
+            df = pd.DataFrame({"date": pd.to_datetime(raw["日期"]).dt.strftime("%Y-%m-%d"), "close": raw["收盘"]})
+            df = df.sort_values("date")
+            _write_atomic(df, out_dir / "index" / f"{symbol}.csv")
+            status[symbol] = f"ok {df['date'].iloc[0]} ~ {df['date'].iloc[-1]}"
+        except Exception as e:
+            status[symbol] = f"failed: {type(e).__name__}: {e}"
+    return status

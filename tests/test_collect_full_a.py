@@ -122,3 +122,94 @@ def test_collect_daily_no_partial_file(tmp_path):
     status = collect.collect_daily(bs, ["SH600000"], tmp_path, retries=2)
     assert status["SH600000"].startswith("failed: ")
     assert list(tmp_path.iterdir()) == []
+
+
+class FakeResponse:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def json(self):
+        return self._payload
+
+
+class FakeSession:
+    """两页数据的东方财富接口；empty 里的报告期返回 result 为 null。"""
+
+    def __init__(self, empty=(), broken=()):
+        self.calls: list[dict] = []
+        self.empty, self.broken = set(empty), set(broken)
+
+    def get(self, url, params=None, timeout=None):
+        self.calls.append(dict(params))
+        flt = params["filter"]
+        if any(d in flt for d in self.broken):
+            raise ConnectionError("连接被重置")
+        if any(d in flt for d in self.empty):
+            return FakeResponse({"result": None, "success": False, "message": "返回数据为空"})
+        page = int(params["pageNumber"])
+        rows = [{"SECURITY_CODE": "600000", "NOTICE_DATE": "2016-03-30 00:00:00", "PARENT_NETPROFIT": 1.0}] * (2 if page == 1 else 1)
+        return FakeResponse({"result": {"pages": 2, "data": rows}, "success": True})
+
+
+class FakeAkIndex:
+    def __init__(self, starts):
+        self.starts = starts
+
+    def stock_zh_index_hist_csindex(self, symbol, start_date, end_date):
+        if symbol not in self.starts:
+            raise KeyError("data")
+        dates = pd.bdate_range(self.starts[symbol], periods=3)
+        return pd.DataFrame({"日期": dates.date, "指数代码": symbol, "收盘": [1000.0, 1001.0, 1002.0]})
+
+
+def test_report_dates():
+    assert collect.report_dates("2008-03-31", "2008-12-31") == ["2008-03-31", "2008-06-30", "2008-09-30", "2008-12-31"]
+    assert collect.report_dates("2008-03-31", "2008-08-15") == ["2008-03-31", "2008-06-30"]
+
+
+def test_collect_reports_reads_all_pages(tmp_path):
+    session = FakeSession()
+    status = collect.collect_reports(session, ["income"], ["2015-12-31"], tmp_path)
+    df = pd.read_csv(tmp_path / "income" / "2015-12-31.csv")
+    assert len(df) == 3 and "NOTICE_DATE" in df.columns
+    assert status == {"income/2015-12-31": "ok"}
+    first = session.calls[0]
+    assert first["reportName"] == "RPT_DMSK_FN_INCOME" and first["columns"] == "ALL"
+    assert "(REPORT_DATE='2015-12-31')" in first["filter"]
+    assert collect.collect_reports(FakeSession(), ["income"], ["2015-12-31"], tmp_path) == {"income/2015-12-31": "ok"}
+
+
+def test_collect_reports_yjbb_uses_its_own_date_field(tmp_path):
+    session = FakeSession()
+    collect.collect_reports(session, ["yjbb"], ["2015-12-31"], tmp_path)
+    assert session.calls[0]["reportName"] == "RPT_LICO_FN_CPD"
+    assert "(REPORTDATE='2015-12-31')" in session.calls[0]["filter"]
+
+
+def test_collect_reports_empty_period(tmp_path):
+    session = FakeSession(empty={"2008-03-31"})
+    status = collect.collect_reports(session, ["income"], ["2008-03-31"], tmp_path, retries=3)
+    assert status == {"income/2008-03-31": "empty"}
+    assert len(session.calls) == 1
+    assert not (tmp_path / "income" / "2008-03-31.csv").exists()
+
+
+def test_collect_reports_failure_is_recorded(tmp_path):
+    session = FakeSession(broken={"2016-03-31"})
+    status = collect.collect_reports(session, ["balance"], ["2016-03-31"], tmp_path, retries=2, pause=0.0)
+    assert status["balance/2016-03-31"].startswith("failed: ")
+    assert len(session.calls) == 2
+
+
+def test_collect_indexes_records_short_history(tmp_path):
+    status = collect.collect_indexes(FakeAkIndex({"H00300": "2013-01-07", "000985": "2009-01-05"}), tmp_path,
+                                     start="20090101", end="20090110")
+    assert status["H00300"].startswith("ok 2013-01-07")
+    df = pd.read_csv(tmp_path / "index" / "H00300.csv")
+    assert list(df.columns) == ["date", "close"] and len(df) == 3
+
+
+def test_collect_indexes_failure_is_recorded(tmp_path):
+    status = collect.collect_indexes(FakeAkIndex({"000985": "2009-01-05"}), tmp_path, start="20090101")
+    assert status["H00300"].startswith("failed: ")
+    assert status["000985"].startswith("ok ")
