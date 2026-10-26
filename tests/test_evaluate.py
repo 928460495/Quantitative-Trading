@@ -141,3 +141,15 @@ def test_signal_that_only_flags_losers_is_a_veto_factor():
     res = _evaluate("veto", signal, returns, ones, 1)
     assert res.category == VETO
     assert res.bottom_t < -3
+
+
+def test_vectorized_ic_matches_pandas_corr():
+    idx, rng = _panel(n_days=20, n_stocks=80, seed=9)
+    f = pd.Series(rng.normal(size=len(idx)), index=idx)
+    r = 0.3 * f + pd.Series(rng.normal(size=len(idx)), index=idx)
+    f.iloc[::7] = np.nan
+    for method in ("pearson", "spearman"):
+        expected = pd.DataFrame({"f": f, "r": r}).dropna().groupby(level="datetime").apply(lambda g: g["f"].corr(g["r"], method=method))
+        assert np.allclose(ic_series(f, r, method), expected)
+    slope = pd.DataFrame({"f": f, "r": r}).dropna().groupby(level="datetime").apply(lambda g: np.polyfit(g["f"], g["r"], 1)[0])
+    assert np.allclose(factor_return_series(f, r), slope)
