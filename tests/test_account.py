@@ -287,3 +287,20 @@ def test_metrics_on_known_path():
     assert m["turnover"] == pytest.approx((50 / 99 + 20 / 121) / 3)
     assert (m["n_trades"], m["n_stops"], m["n_delisted"]) == (2, 1, 1)
     assert m["avg_exposure"] == pytest.approx(np.mean([100 / 110, 90 / 99, 100 / 121]))
+
+
+# ---------- 任务 7：和 Qlib 回测核对（需要数据包和第 5 个 PR 的缓存）----------
+
+
+@pytest.mark.data
+def test_account_engine_matches_qlib_backtest():
+    import importlib.util
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    spec = importlib.util.spec_from_file_location("check_account", root / "scripts" / "check_account.py")
+    check = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(check)
+    out = check.compare()
+    assert abs(out["ours"]["annual_return"] - out["qlib"]["annual_return"]) < 0.01
+    assert out["daily_corr"] > 0.95
