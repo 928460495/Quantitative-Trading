@@ -273,3 +273,23 @@ def test_pack_roundtrip(raw_dir, tmp_path):
     assert meta["failures"]["daily"] == {"SZ000003": "failed: x"}
     assert meta["coverage"]["2011"]["income"] == 1
     assert not any(p.name.startswith(".") or p.name == "staging" for p in (tmp_path / "out").iterdir())
+
+
+def test_collect_daily_relogins_after_network_error(tmp_path):
+    class Flaky(FakeBs):
+        def query_history_k_data_plus(self, code, fields, **kw):
+            if not self.calls:
+                self.calls.append(code)
+                raise TimeoutError("timed out")
+            return super().query_history_k_data_plus(code, fields, **kw)
+
+    bs = Flaky()
+    assert collect.collect_daily(bs, ["SH600000"], tmp_path) == {"SH600000": "ok"}
+    assert bs.logins == 1
+
+
+def test_collect_daily_prints_progress(tmp_path, capsys):
+    codes = [f"SH6{i:05d}" for i in range(120)]
+    collect.collect_daily(FakeBs(), codes, tmp_path, progress_every=50)
+    out = capsys.readouterr().out
+    assert "50/120" in out and "100/120" in out
