@@ -331,6 +331,26 @@ def pack(raw_dir: Path, out_dir: Path, collected_on: str) -> Path:
         tmp.unlink(missing_ok=True)
 
 
+def shards(todo: list[str], n: int) -> list[list[str]]:
+    """把股票轮流分给 n 个连接。"""
+    return [todo[k::n] for k in range(n)]
+
+
+def _daily_worker(job: tuple) -> dict[str, str]:
+    """一个独立登录的 baostock 连接，下载分到的那部分股票。并行时每个进程跑一个。"""
+    instruments, out_dir, start, retries, pause = job
+    import socket
+
+    import baostock as bs
+
+    socket.setdefaulttimeout(60)
+    bs.login()
+    try:
+        return collect_daily(bs, instruments, out_dir, start=start, retries=retries, pause=pause)
+    finally:
+        bs.logout()
+
+
 def _save_status(raw_dir: Path, part: str, status: dict[str, str]) -> None:
     import json
 
@@ -351,6 +371,7 @@ def main() -> None:
     ap.add_argument("--retries", type=int, default=3)
     ap.add_argument("--pause", type=float, default=0.0, help="每次请求之间停几秒")
     ap.add_argument("--raw-dir", type=Path, default=RAW_DIR)
+    ap.add_argument("--workers", type=int, default=1, help="日线用几个连接并行下载，网络慢时可以试 4")
     args = ap.parse_args()
     raw_dir: Path = args.raw_dir
     raw_dir.mkdir(parents=True, exist_ok=True)
@@ -386,8 +407,16 @@ def main() -> None:
         gone_early = pd.to_datetime(stocks["out_date"].replace("", None), errors="coerce") < pd.Timestamp(args.start)
         todo = list(stocks.loc[~gone_early, "instrument"])
         print(f"日线：{len(todo)} 只（{args.start} 前已退市的 {int(gone_early.sum())} 只不请求）")
-        _save_status(raw_dir, "daily", collect_daily(bs, todo, raw_dir / "daily", start=args.start,
-                                                     retries=args.retries, pause=args.pause))
+        if args.workers > 1:
+            import multiprocessing as mp
+
+            jobs = [(part, raw_dir / "daily", args.start, args.retries, args.pause) for part in shards(todo, args.workers)]
+            print(f"用 {args.workers} 个连接并行下载，每个约 {len(jobs[0][0])} 只（进度按各自的份数打印）")
+            with mp.get_context("spawn").Pool(args.workers) as pool:
+                status = {k: v for part in pool.map(_daily_worker, jobs) for k, v in part.items()}
+        else:
+            status = collect_daily(bs, todo, raw_dir / "daily", start=args.start, retries=args.retries, pause=args.pause)
+        _save_status(raw_dir, "daily", status)
     if bs is not None:
         bs.logout()
     if "reports" in parts:

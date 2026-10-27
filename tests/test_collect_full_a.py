@@ -314,3 +314,10 @@ def test_read_all_raises_when_transfer_breaks_midway():
 def test_stock_list_rejects_truncated_list():
     with pytest.raises(ValueError, match="只拿到"):
         collect.stock_list(FakeBs(), min_count=4000)
+
+
+def test_shards_cover_everything_once():
+    todo = [f"S{i}" for i in range(10)]
+    parts = collect.shards(todo, 3)
+    assert len(parts) == 3 and sorted(sum(parts, [])) == sorted(todo)
+    assert collect.shards(todo, 1) == [todo]
