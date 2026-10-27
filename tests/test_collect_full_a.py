@@ -80,7 +80,7 @@ def test_to_instrument():
 
 
 def test_stock_list_keeps_only_stocks_and_drops_bj():
-    out = collect.stock_list(FakeBs())
+    out = collect.stock_list(FakeBs(), min_count=1)
     assert list(out.columns) == ["instrument", "name", "ipo_date", "out_date"]
     assert list(out["instrument"]) == ["SH600000", "SZ000001", "SZ000003"]
     assert out.set_index("instrument").loc["SZ000003", "out_date"] == "2002-06-14"
@@ -293,3 +293,24 @@ def test_collect_daily_prints_progress(tmp_path, capsys):
     collect.collect_daily(FakeBs(), codes, tmp_path, progress_every=50)
     out = capsys.readouterr().out
     assert "50/120" in out and "100/120" in out
+
+
+def test_read_all_raises_when_transfer_breaks_midway():
+    rs = FakeRS(["a"], [["1"], ["2"], ["3"]])
+    rs.next_orig = rs.next
+
+    def broken_next():
+        ok = rs.next_orig()
+        if rs._i == 2:
+            rs.error_code = "10002007"  # 读到一半连接断了：baostock 不抛异常，只是停下并设错误码
+            return False
+        return ok
+
+    rs.next = broken_next
+    with pytest.raises(ConnectionError):
+        collect._read_all(rs)
+
+
+def test_stock_list_rejects_truncated_list():
+    with pytest.raises(ValueError, match="只拿到"):
+        collect.stock_list(FakeBs(), min_count=4000)
