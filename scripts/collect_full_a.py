@@ -90,11 +90,15 @@ def _fetch_daily(bs, instrument: str, start: str, end: str | None) -> pd.DataFra
 
 
 def collect_daily(bs, instruments: list[str], out_dir: Path, start: str = "2009-01-01", end: str | None = None,
-                  retries: int = 3, pause: float = 0.0) -> dict[str, str]:
-    """每只股票一个文件，已存在就跳过；没有数据的写一个只有表头的文件，重跑时也跳过。"""
+                  retries: int = 3, pause: float = 0.0, progress_every: int = 50) -> dict[str, str]:
+    """每只股票一个文件，已存在就跳过；没有数据的写一个只有表头的文件，重跑时也跳过。每 progress_every 只打印一次进度。"""
     out_dir.mkdir(parents=True, exist_ok=True)
     status: dict[str, str] = {}
-    for instrument in instruments:
+    started = time.time()
+    for n, instrument in enumerate(instruments, 1):
+        if n % progress_every == 0:
+            failed = sum(v.startswith("failed") for v in status.values())
+            print(f"  日线 {n}/{len(instruments)}，失败 {failed}，已用 {(time.time() - started) / 60:.0f} 分钟", flush=True)
         path = out_dir / f"{instrument}.csv"
         if path.exists():
             status[instrument] = "ok" if len(pd.read_csv(path, nrows=1)) else "empty"
@@ -103,12 +107,17 @@ def collect_daily(bs, instruments: list[str], out_dir: Path, start: str = "2009-
             try:
                 df = _fetch_daily(bs, instrument, start, end)
                 break
-            except Exception as e:  # 网络中断、登录过期、返回格式异常都重试
+            except Exception as e:  # 网络中断、超时、登录过期、返回格式异常都重试
                 if attempt == retries:
                     status[instrument] = f"failed: {type(e).__name__}: {e}"
                     df = None
                 else:
                     time.sleep(pause * 2**attempt)
+                    if not isinstance(e, ConnectionError) or "baostock 返回" not in str(e):
+                        try:  # 连接断了要重新登录才能继续（返回错误码的情况 _fetch_daily 已经登录过）
+                            bs.login()
+                        except Exception:
+                            pass
         if df is None:
             continue
         if df.empty:
@@ -340,8 +349,11 @@ def main() -> None:
 
     bs = None
     if {"list", "daily"} & set(parts):
+        import socket
+
         import baostock
 
+        socket.setdefaulttimeout(60)  # baostock 不设超时，服务器不响应时会一直卡住；超时后按失败重试
         bs = baostock
         lg = bs.login()
         if lg.error_code != "0":
