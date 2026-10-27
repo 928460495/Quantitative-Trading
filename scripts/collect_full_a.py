@@ -52,14 +52,20 @@ def to_bs_code(instrument: str) -> str:
 
 
 def _read_all(rs) -> pd.DataFrame:
+    """读完 baostock 的结果。传到一半断了 baostock 不报错，只是停下并设错误码，所以读完要检查。"""
     rows = []
     while rs.next():
         rows.append(rs.get_row_data())
+    if rs.error_code != "0":
+        raise ConnectionError(f"baostock 读到第 {len(rows)} 行时出错：{rs.error_code} {rs.error_msg}")
     return pd.DataFrame(rows, columns=rs.fields)
 
 
-def stock_list(bs) -> pd.DataFrame:
-    """全部股票（含退市），排除指数、基金和北交所。"""
+MIN_STOCKS = 4000  # 沪深两市含退市股约 5500 只，少于这个数说明列表没下载完整
+
+
+def stock_list(bs, min_count: int = MIN_STOCKS) -> pd.DataFrame:
+    """全部股票（含退市），排除指数、基金和北交所。数量明显不够时报错，不把半张表当完整的用。"""
     raw = _read_all(bs.query_stock_basic())
     raw = raw[raw["type"] == "1"]
     out = pd.DataFrame({
@@ -68,7 +74,10 @@ def stock_list(bs) -> pd.DataFrame:
         "ipo_date": raw["ipoDate"],
         "out_date": raw["outDate"],
     })
-    return out[~out["instrument"].str.startswith("BJ")].reset_index(drop=True)
+    out = out[~out["instrument"].str.startswith("BJ")].reset_index(drop=True)
+    if len(out) < min_count:
+        raise ValueError(f"股票列表只拿到 {len(out)} 只（应该有 {min_count} 只以上），多半是下载中断了")
+    return out
 
 
 def _write_atomic(df: pd.DataFrame, path: Path) -> None:
@@ -360,7 +369,16 @@ def main() -> None:
             raise SystemExit(f"baostock 登录失败：{lg.error_code} {lg.error_msg}")
 
     if "list" in parts:
-        stocks = stock_list(bs)
+        for attempt in range(1, 6):
+            try:
+                stocks = stock_list(bs)
+                break
+            except Exception as e:
+                print(f"股票列表第 {attempt} 次失败：{e}")
+                if attempt == 5:
+                    raise SystemExit("股票列表下载 5 次都失败，请检查网络后重跑")
+                time.sleep(10 * attempt)
+                bs.login()
         _write_atomic(stocks, raw_dir / "stocks.csv")
         print(f"股票列表：{len(stocks)} 只（含退市）")
     if "daily" in parts:
