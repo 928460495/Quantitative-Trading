@@ -99,12 +99,26 @@ def _fetch_daily(bs, instrument: str, start: str, end: str | None) -> pd.DataFra
 
 
 def collect_daily(bs, instruments: list[str], out_dir: Path, start: str = "2009-01-01", end: str | None = None,
-                  retries: int = 3, pause: float = 0.0, progress_every: int = 50) -> dict[str, str]:
-    """每只股票一个文件，已存在就跳过；没有数据的写一个只有表头的文件，重跑时也跳过。每 progress_every 只打印一次进度。"""
+                  retries: int = 3, pause: float = 0.0, progress_every: int = 50, backoff_after: int = 10,
+                  backoff_seconds: float = 300) -> dict[str, str]:
+    """每只股票一个文件，已存在就跳过；没有数据的写一个只有表头的文件，重跑时也跳过。每 progress_every 只打印一次进度。
+
+    连续 backoff_after 只失败，多半是服务器暂时拒绝连接：停 backoff_seconds 秒、重新登录再继续，
+    不要把剩下的股票都快速试失败。
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
     status: dict[str, str] = {}
     started = time.time()
+    streak = 0
     for n, instrument in enumerate(instruments, 1):
+        if streak >= backoff_after:
+            print(f"  连续 {streak} 只失败，服务器可能暂时拒绝连接，停 {backoff_seconds / 60:.0f} 分钟后重新登录", flush=True)
+            time.sleep(backoff_seconds)
+            try:
+                bs.login()
+            except Exception:
+                pass
+            streak = 0
         if n % progress_every == 0:
             failed = sum(v.startswith("failed") for v in status.values())
             print(f"  日线 {n}/{len(instruments)}，失败 {failed}，已用 {(time.time() - started) / 60:.0f} 分钟", flush=True)
@@ -128,7 +142,9 @@ def collect_daily(bs, instruments: list[str], out_dir: Path, start: str = "2009-
                         except Exception:
                             pass
         if df is None:
+            streak += 1
             continue
+        streak = 0
         if df.empty:
             df = pd.DataFrame(columns=DAILY_FIELDS.split(","))
         _write_atomic(df, path)

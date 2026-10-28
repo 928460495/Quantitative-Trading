@@ -321,3 +321,13 @@ def test_shards_cover_everything_once():
     parts = collect.shards(todo, 3)
     assert len(parts) == 3 and sorted(sum(parts, [])) == sorted(todo)
     assert collect.shards(todo, 1) == [todo]
+
+
+def test_collect_daily_backs_off_after_consecutive_failures(tmp_path, monkeypatch):
+    slept = []
+    monkeypatch.setattr(collect.time, "sleep", lambda s: slept.append(s))
+    codes = [f"SH6{i:05d}" for i in range(12)]
+    bs = FakeBs(broken={collect.to_bs_code(c) for c in codes[:10]})
+    status = collect.collect_daily(bs, codes, tmp_path, retries=1, backoff_after=10, backoff_seconds=300)
+    assert 300 in slept                       # 连续 10 只失败后停 5 分钟
+    assert status[codes[10]] == "ok" and status[codes[11]] == "ok"
