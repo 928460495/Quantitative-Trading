@@ -51,8 +51,11 @@ def ts_max(x: Frame, d: int) -> Frame:
 
 
 def ts_corr(x: Frame, y: Frame, d: int) -> Frame:
-    out = _roll(x, d).corr(y)
-    return out.replace([np.inf, -np.inf], np.nan)
+    """滚动相关系数。窗口里数据完整、但有一边是常数（方差为 0）时记 0，不记缺失：
+    否则缺失会顺着后面的时间窗口一路扩散（Alpha101 里对短窗口排名求相关很常见）。"""
+    out = _roll(x, d).corr(y).replace([np.inf, -np.inf], np.nan)
+    complete = (x.notna() & y.notna()).astype(float).rolling(int(d), min_periods=int(d)).sum() == int(d)
+    return out.mask(out.isna() & complete, 0.0)
 
 
 def ts_cov(x: Frame, y: Frame, d: int) -> Frame:

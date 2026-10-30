@@ -154,6 +154,15 @@ def _window(x) -> int:
     return int(np.floor(float(x)))
 
 
+def _reg_window(args) -> int:
+    """REGBETA(y, x, n)；国泰君安里常写成 REGBETA(y, SEQUENCE(n))，窗口就是序列长度。"""
+    if len(args) >= 3:
+        return _window(args[2])
+    if isinstance(args[1], ops.Sequence):
+        return args[1].n
+    raise FormulaError("REGBETA / REGRESI 缺窗口参数")
+
+
 def _num_frame(x, like: pd.DataFrame) -> pd.DataFrame:
     return x if isinstance(x, pd.DataFrame) else pd.DataFrame(float(x), index=like.index, columns=like.columns)
 
@@ -224,15 +233,15 @@ _FUNCS = {
     "SMA": lambda a, d: ops.sma(a[0], float(a[1]), float(a[2])),
     "COUNT": lambda a, d: ops.count(a[0], _window(a[1])),
     "SUMIF": lambda a, d: ops.sumif(a[0], _window(a[1]), a[2]),
-    "REGBETA": lambda a, d: ops.regbeta(a[0], a[1], _window(a[2])),
-    "REGRESI": lambda a, d: ops.regresi(a[0], a[1], _window(a[2])),
+    "REGBETA": lambda a, d: ops.regbeta(a[0], a[1], _reg_window(a)),
+    "REGRESI": lambda a, d: ops.regresi(a[0], a[1], _reg_window(a)),
     "SEQUENCE": lambda a, d: ops.sequence(_window(a[0])),
     "PROD": lambda a, d: ops.ts_product(a[0], _window(a[1])),
     "PRODUCT": lambda a, d: ops.ts_product(a[0], _window(a[1])),
     "LOG": lambda a, d: _log(a[0]),
     "ABS": lambda a, d: abs(a[0]),
     "SIGN": lambda a, d: np.sign(a[0]),
-    "SIGNEDPOWER": lambda a, d: ops.signed_power(a[0], float(a[1])),
+    "SIGNEDPOWER": lambda a, d: ops.signed_power(a[0], a[1] if isinstance(a[1], pd.DataFrame) else float(a[1])),
     "SCALE": lambda a, d: ops.cs_scale(a[0], float(a[1]) if len(a) > 1 else 1.0),
     "INDNEUTRALIZE": lambda a, d: ops.ind_neutralize(a[0], a[1]),
     "MAX": lambda a, d: _max_min(a, True, d),
@@ -240,7 +249,7 @@ _FUNCS = {
 }
 
 _INDCLASS = {"indclass.sector": "industry_l1", "indclass.industry": "industry_l2", "indclass.subindustry": "industry_l3"}
-_ALIASES = {"ret": "returns", "vol": "volume", "banchmarkindexclose": "benchmark_close",
+_ALIASES = {"ret": "returns", "vol": "volume", "cap": "float_mcap", "banchmarkindexclose": "benchmark_close",
             "benchmarkindexclose": "benchmark_close", "banchmarkindexopen": "benchmark_open",
             "benchmarkindexopen": "benchmark_open"}
 
