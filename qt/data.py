@@ -10,7 +10,8 @@ from qt.config import DATA_DIR, check_range
 _initialized = False
 
 
-def init_qlib() -> None:
+def init_qlib(kernels: int = 1) -> None:
+    """kernels：Qlib 计算表达式时用几个进程（按股票分）。第一次调用时生效。"""
     global _initialized
     if _initialized:
         return
@@ -18,7 +19,7 @@ def init_qlib() -> None:
 
     if not (DATA_DIR / "calendars" / "day.txt").exists():
         raise FileNotFoundError(f"在 {DATA_DIR} 找不到 Qlib 数据，先运行 python scripts/download_data.py")
-    qlib.init(provider_uri=str(DATA_DIR), region="cn", kernels=1)
+    qlib.init(provider_uri=str(DATA_DIR), region="cn", kernels=kernels)
     _initialized = True
 
 
