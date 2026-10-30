@@ -92,7 +92,7 @@ def align_to_days(records: pd.DataFrame, cols: list[str], index: pd.MultiIndex, 
 
     晚公告的旧报告期（比如一季报先出、年报后出）不覆盖已经可用的更新报告期。返回 cols 加上 report_date。
     """
-    rec = records[["instrument", "report_date", "notice_date", *cols]].copy()
+    rec = records[["instrument", "report_date", "notice_date", *cols]].astype({"instrument": str})
     pos = calendar.searchsorted(rec["notice_date"].to_numpy(), side="right")
     rec = rec[pos < len(calendar)].assign(available=calendar[pos[pos < len(calendar)]])
     rec = rec.sort_values(["instrument", "available", "report_date"])
@@ -100,7 +100,7 @@ def align_to_days(records: pd.DataFrame, cols: list[str], index: pd.MultiIndex, 
     rec = rec[rec["report_date"] >= newest].drop_duplicates(["instrument", "available"], keep="last")
 
     days = pd.DataFrame({"datetime": index.get_level_values("datetime"),
-                         "instrument": index.get_level_values("instrument")})
+                         "instrument": index.get_level_values("instrument").astype(str)})
     days["_order"] = np.arange(len(days))
     merged = pd.merge_asof(days.sort_values("datetime"), rec.sort_values("available"),
                            left_on="datetime", right_on="available", by="instrument", direction="backward")

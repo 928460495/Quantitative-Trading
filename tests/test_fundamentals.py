@@ -93,3 +93,11 @@ def test_older_period_announced_later_does_not_override_newer():
 def test_single_quarter_with_several_stocks():
     df = pd.concat([_records([10.0, 25.0, 45.0, 70.0]), _records([1.0, 3.0, 6.0, 10.0], code="SZ000001")], ignore_index=True)
     assert list(single_quarter(df, "net_profit")) == [10.0, 15.0, 20.0, 25.0, 1.0, 2.0, 3.0, 4.0]
+
+
+def test_align_accepts_categorical_instrument_index():
+    rec = pd.DataFrame({"instrument": ["SH600000"], "report_date": [pd.Timestamp("2020-12-31")],
+                        "notice_date": [pd.Timestamp("2021-04-28")], "net_profit": [100.0]})
+    idx = pd.MultiIndex.from_arrays([CAL, pd.Categorical(["SH600000"] * len(CAL))], names=["datetime", "instrument"])
+    out = align_to_days(rec, ["net_profit"], idx, CAL)
+    assert out["net_profit"].iloc[-1] == 100.0
