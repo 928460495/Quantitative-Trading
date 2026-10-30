@@ -63,7 +63,7 @@ def _qlib_wide(instruments: list[str], fields: dict[str, str], start: str, end: 
     df.columns = list(fields)
     df = df.swaplevel().sort_index()
     df.index.names = ["datetime", "instrument"]
-    df = df.replace([np.inf, -np.inf], np.nan)
+    df = df.replace([np.inf, -np.inf], np.nan).astype(np.float64)  # Qlib 给的是 float32，长链条运算误差会放大到 1e-7
     return {k: df[k].unstack("instrument") for k in fields}
 
 
