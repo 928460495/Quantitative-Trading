@@ -59,3 +59,53 @@ python scripts/run_single_factor.py --neutralize
 ```
 
 报告写到 `reports/single_factor/csi300_train_neutral/`，汇总表最后有和未中性化结果的对比。
+
+## 全 A 数据（baostock、东方财富、中证指数）
+
+全 A 的日线和财务数据量大（几百 MB），不提交到仓库，打包后上传到本仓库的 GitHub Release，云端再下载。
+
+注意：仓库是公开的，Release 里的文件任何人都能下载。
+
+### 1. 拿到采集脚本
+
+在仓库目录里依次运行：
+
+```bash
+git fetch origin claude/full-a-data
+```
+
+```bash
+git checkout claude/full-a-data
+```
+
+### 2. 装依赖
+
+沿用之前采集行业和股本时的环境（比如 `conda activate qt`），再装一次依赖（新加了 baostock、pyarrow、requests）：
+
+```bash
+pip install -r requirements-collect.txt
+```
+
+### 3. 采集
+
+```bash
+python scripts/collect_full_a.py
+```
+
+依次做五步：股票列表 → 日线（约 5500 只，1–3 小时）→ 季度财务（约 300 次请求）→ 指数 → 打包。中途断了直接重跑同一条命令，做过的会跳过。
+
+跑完检查屏幕上的输出：
+
+- `daily：{...}` 里 `failed` 应该是 0；不是的话再跑一次（只会补失败的）
+- 每年覆盖情况表：`daily` 应该接近 `listed`；财务表（`income` 等）明显少于 `listed` 的年份，把这张表发给 Claude
+- 最后一行是生成的文件，例如 `data/full_a_20261027.tar`
+
+### 4. 上传到 GitHub Release
+
+1. 打开 https://github.com/928460495/Quantitative-Trading/releases/new
+2. "Choose a tag" 里输入新 tag，例如 `full-a-20261027`（和文件名里的日期一致），选 "Create new tag"
+3. 标题随便写，例如"全 A 数据 2026-10-27"
+4. 把 `data/full_a_20261027.tar` 拖进附件区，等上传完成（单个文件上限 2 GB）
+5. 点 "Publish release"
+
+然后把 tag 告诉 Claude。

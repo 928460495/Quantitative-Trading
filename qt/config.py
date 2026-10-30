@@ -13,6 +13,8 @@ from pathlib import Path
 import pandas as pd
 
 DATA_DIR = Path(os.environ.get("QT_DATA_DIR", "~/.qlib/qlib_data/cn_data")).expanduser()
+# 全 A 补充数据（baostock、东方财富、中证指数），由 scripts/download_full_a.py 下载
+FULL_A_DIR = Path(os.environ.get("QT_FULL_A_DIR", "~/.qlib/qt_full_a")).expanduser()
 
 SEGMENTS: dict[str, tuple[str, str | None]] = {
     "train": ("2010-01-01", "2018-12-31"),
