@@ -146,3 +146,8 @@ def test_corr_constant_window_is_zero_but_missing_stays_missing():
     assert c["B"].iloc[2] == 0.0           # B 的 x 连续 3 天不变：相关系数记 0
     assert np.isnan(c["B"].iloc[3])        # 窗口里有缺失：仍然缺失
     assert c["A"].iloc[2] == pytest.approx(np.corrcoef([1, 2, 3], [3, 1, 2])[0, 1])
+
+
+def test_ts_rank_pct_is_rank_over_valid_days():
+    # A 最近 3 天 3,2,5：排第 3/3；B 3,2,1：1/3
+    assert ops.ts_rank(X, 3, pct=True).iloc[-1].tolist() == pytest.approx([1.0, 1 / 3])

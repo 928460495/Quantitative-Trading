@@ -222,7 +222,7 @@ _FUNCS = {
     "TSMIN": lambda a, d: ops.ts_min(a[0], _window(a[1])),
     "TS_MIN": lambda a, d: ops.ts_min(a[0], _window(a[1])),
     "TSRANK": lambda a, d: ops.ts_rank(a[0], _window(a[1])),
-    "TS_RANK": lambda a, d: ops.ts_rank(a[0], _window(a[1])),
+    "TS_RANK": lambda a, d: ops.ts_rank(a[0], _window(a[1]), pct=(d == "wq")),  # WorldQuant：0–1 百分位
     "TS_ARGMAX": lambda a, d: ops.ts_argmax(a[0], _window(a[1])),
     "TS_ARGMIN": lambda a, d: ops.ts_argmin(a[0], _window(a[1])),
     "HIGHDAY": lambda a, d: ops.highday(a[0], _window(a[1])),

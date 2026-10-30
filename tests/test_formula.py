@@ -37,7 +37,7 @@ def test_logic_ops():
 
 def test_functions_map_to_ops_case_insensitive():
     pd.testing.assert_frame_equal(ev("TSRANK(CLOSE, 5)"), ops.ts_rank(ENV["close"], 5))
-    pd.testing.assert_frame_equal(ev("ts_rank(close, 5.9)", "wq"), ops.ts_rank(ENV["close"], 5))   # 非整数窗口取整
+    pd.testing.assert_frame_equal(ev("ts_rank(close, 5.9)", "wq"), ops.ts_rank(ENV["close"], 5, pct=True))   # 非整数窗口取整
     pd.testing.assert_frame_equal(ev("RANK(CLOSE)"), ops.cs_rank(ENV["close"]))
 
 
@@ -82,3 +82,10 @@ def test_unknown_names_raise():
 def test_parse_reports_variables():
     tree = parse("CORR(VWAP, MEAN(VOLUME,60), 6) + adv20", "wq")
     assert tree.variables() == {"vwap", "volume", "adv20"}
+
+
+def test_worldquant_ts_rank_is_percentile_gtja_is_position():
+    wq = ev("ts_rank(close, 5)", "wq")
+    gt = ev("TSRANK(CLOSE, 5)", "gtja")
+    assert wq.max().max() <= 1.0 and gt.max().max() == 5.0
+    pd.testing.assert_frame_equal(wq.iloc[4:], gt.iloc[4:] / 5)     # 窗口满 5 天以后；开头只有 4 天时除以 4

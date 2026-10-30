@@ -102,8 +102,10 @@ def ts_product(x: Frame, d: int) -> Frame:
     return _finish(x, acc, _valid_count(arr, d) >= min_valid(d))
 
 
-def ts_rank(x: Frame, d: int) -> Frame:
-    """当天的值在过去 d 天（有值的日子）里排第几（1 = 最小，并列取平均）。当天没有值就是缺失。"""
+def ts_rank(x: Frame, d: int, pct: bool = False) -> Frame:
+    """当天的值在过去 d 天（有值的日子）里排第几（1 = 最小，并列取平均）。当天没有值就是缺失。
+
+    pct=True 时除以有值的天数，落在 (0, 1]：WorldQuant 的 ts_rank 是这种口径，公式里常拿它和横截面 rank 比大小。"""
     d = int(d)
     cur = x.to_numpy(dtype=float)
     less = np.zeros(cur.shape, dtype=np.float32)
@@ -111,8 +113,10 @@ def ts_rank(x: Frame, d: int) -> Frame:
     for k in range(1, d):
         less[k:] += cur[:-k] < cur[k:]       # 和缺失比较结果是 False，缺失的日子自动不算
         equal[k:] += cur[:-k] == cur[k:]
-    enough = (_valid_count(cur, d) >= min_valid(d)) & ~np.isnan(cur)
-    return _finish(x, less + (equal + 1) / 2, enough)
+    count = _valid_count(cur, d)
+    enough = (count >= min_valid(d)) & ~np.isnan(cur)
+    rank = less + (equal + 1) / 2
+    return _finish(x, rank / np.maximum(count, 1) if pct else rank, enough)
 
 
 def _arg_extreme(x: Frame, d: int, take_max: bool) -> tuple[np.ndarray, np.ndarray]:
