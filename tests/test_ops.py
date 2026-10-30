@@ -33,10 +33,25 @@ def test_ts_basic_windows():
     assert np.isnan(ops.ts_sum(X, 3)["A"].iloc[1])
 
 
-def test_window_with_nan_is_nan():
-    y = _df([[1, 1], [NAN, 1], [3, 1], [4, 1], [5, 1]])
-    assert np.isnan(ops.ts_mean(y, 3)["A"].iloc[2]) and np.isnan(ops.ts_rank(y, 3)["A"].iloc[3])
-    assert ops.ts_mean(y, 3)["A"].iloc[4] == 4.0
+def test_window_missing_up_to_a_quarter_uses_available_days():
+    # 窗口 4 天缺 1 天（25%）：用剩下 3 天算；缺 2 天（50%）：缺失
+    y = _df([[1, 1], [NAN, NAN], [3, NAN], [4, 4], [5, 5]])
+    assert ops.ts_mean(y, 4)["A"].iloc[3] == pytest.approx((1 + 3 + 4) / 3)
+    assert np.isnan(ops.ts_mean(y, 4)["B"].iloc[3])
+    assert ops.ts_rank(y, 4)["A"].iloc[3] == 3            # 4 在 1、3、4 里排第 3
+    assert ops.decay_linear(y, 4)["A"].iloc[3] == pytest.approx((4 * 4 + 3 * 3 + 1 * 1) / (4 + 3 + 1))   # 前 2 天缺失（权重 2）
+    assert ops.ts_argmax(y, 4)["A"].iloc[3] == 4
+    assert ops.ts_product(y, 4)["A"].iloc[3] == 12
+    assert ops.ts_corr(y, y * 2, 4)["A"].iloc[3] == pytest.approx(1.0)
+
+
+def test_suspended_today_rank_is_missing():
+    y = _df([[1, 1], [2, 2], [3, 3], [NAN, 4]])
+    assert np.isnan(ops.ts_rank(y, 4)["A"].iloc[3])       # 当天没有值：排名缺失
+
+
+def test_window_not_full_yet_is_missing():
+    assert np.isnan(ops.ts_mean(X, 3)["A"].iloc[1]) and np.isnan(ops.ts_rank(X, 3)["A"].iloc[1])
 
 
 def test_ts_rank_and_argmax():

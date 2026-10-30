@@ -24,12 +24,21 @@ def rank(x):
     return x.rank(axis=1, pct=True)
 
 
+def mp(d):
+    """和 qt.ops 同一条规则：窗口里最多缺 1/4。"""
+    return d - d // 4
+
+
+def roll(x, d):
+    return x.rolling(d, min_periods=mp(d))
+
+
 def corr(x, y, d):
-    return x.rolling(d).corr(y)
+    return roll(x.where(y.notna()), d).corr(y.where(x.notna()))
 
 
 def apply(x, d, fn):
-    return x.rolling(d).apply(fn, raw=True)
+    return x.rolling(d, min_periods=mp(d)).apply(fn, raw=True)
 
 
 def sma(x, n, m):
@@ -49,9 +58,9 @@ def hand(name, e):
     o, h, lo, c, v, vw, r = (e[k] for k in ("open", "high", "low", "close", "volume", "vwap", "returns"))
     pc = c.shift(1)
     if name == "wq001":
-        x = pd.DataFrame(np.where(r < 0, r.rolling(20).std(), c), index=c.index, columns=c.columns)
+        x = pd.DataFrame(np.where(r < 0, roll(r, 20).std(), c), index=c.index, columns=c.columns).where(r.notna())
         sp = np.sign(x) * np.abs(x) ** 2
-        return rank(apply(sp, 5, lambda a: len(a) - np.argmax(a[::-1]))) - 0.5      # 并列取最近一天
+        return rank(apply(sp, 5, lambda a: len(a) - np.nanargmax(a[::-1]))) - 0.5   # 并列取最近一天，缺失不参与
     if name == "wq002":
         return -corr(rank(np.log(v).diff(2)), rank((c - o) / o), 6)
     if name == "wq003":
@@ -61,7 +70,8 @@ def hand(name, e):
     if name == "wq012":
         return np.sign(v.diff()) * (-c.diff())
     if name == "wq013":
-        return -rank(rank(c).rolling(5).cov(rank(v)))
+        rc, rv = rank(c), rank(v)
+        return -rank(roll(rc.where(rv.notna()), 5).cov(rv.where(rc.notna())))
     if name == "wq033":
         return rank(-(1 - o / c))
     if name == "wq041":
@@ -74,21 +84,22 @@ def hand(name, e):
         return -corr(rank(np.log(v).diff(1)), rank((c - o) / o), 6)
     if name == "gtja003":
         inner = np.where(c == pc, 0.0, c - np.where(c > pc, np.minimum(lo, pc), np.maximum(h, pc)))
-        return pd.DataFrame(inner, index=c.index, columns=c.columns).rolling(6).sum()
+        inner = pd.DataFrame(inner, index=c.index, columns=c.columns).where(c.notna() & pc.notna())
+        return roll(inner, 6).sum()
     if name == "gtja014":
         return c - c.shift(5)
     if name == "gtja021":
         t = np.arange(1, 7)
-        return apply(c.rolling(6).mean(), 6, lambda a: np.polyfit(t, a, 1)[0])
+        return apply(roll(c, 6).mean(), 6, lambda a: np.polyfit(t, a, 1)[0])
     if name == "gtja031":
-        m = c.rolling(12).mean()
+        m = roll(c, 12).mean()
         return (c - m) / m * 100
     if name == "gtja063":
         d = c.diff()
         return sma(d.clip(lower=0), 6, 1) / sma(d.abs(), 6, 1) * 100
     if name == "gtja076":
         a = (c / pc - 1).abs() / v
-        return a.rolling(20).std() / a.rolling(20).mean()
+        return roll(a, 20).std() / roll(a, 20).mean()
     if name == "gtja109":
         s = sma(h - lo, 10, 2)
         return s / sma(s, 10, 2)
@@ -96,7 +107,7 @@ def hand(name, e):
         tp = (h + lo + c) / 3
         pos = pd.DataFrame(np.where(tp > tp.shift(1), tp * v, 0.0), index=c.index, columns=c.columns)
         neg = pd.DataFrame(np.where(tp < tp.shift(1), tp * v, 0.0), index=c.index, columns=c.columns)
-        return 100 - 100 / (1 + pos.rolling(14).sum() / neg.rolling(14).sum())
+        return 100 - 100 / (1 + roll(pos, 14).sum() / roll(neg, 14).sum())
     if name == "gtja150":
         return (c + h + lo) / 3 * v
     raise KeyError(name)

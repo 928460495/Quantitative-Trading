@@ -1,8 +1,10 @@
 """因子算子：在"日期 × 股票"的宽表上运算（行是交易日，列是股票）。
 
 Qlib 的表达式只能逐只股票算时间序列，Alpha101、Alpha191 大量用到同一天股票之间的排名，所以另写一套。
-约定（和 Qlib、pandas rolling 一致）：
-- 时间序列算子的窗口里有缺失，结果就是缺失
+约定：
+- 时间序列算子的窗口里允许有不超过 1/4 的缺失（停牌），用有值的那些天算；缺得更多就是缺失。
+  Qlib 的滚动算子只要有一个值就算（min_periods=1），太松；全部要求完整又太严：
+  2010–2018 年停牌常见，一只股票一年里停过一天，250 日窗口的因子就会缺一整年
 - 横截面算子只在同一天的股票之间算，不用到别的日子
 - 时序排名、线性衰减加权这类算子用"错位相加"实现：循环窗口长度次，每次整表运算，不逐窗口调 Python 函数
 """
@@ -13,6 +15,13 @@ import numpy as np
 import pandas as pd
 
 Frame = pd.DataFrame
+MAX_MISSING_SHARE = 0.25
+
+
+def min_valid(d: int) -> int:
+    """窗口 d 天里至少要有几天有值。"""
+    d = int(d)
+    return d - int(np.floor(d * MAX_MISSING_SHARE))
 
 
 # ---------- 时间序列 ----------
@@ -27,7 +36,7 @@ def delta(x: Frame, d: int) -> Frame:
 
 def _roll(x: Frame, d: int):
     d = int(d)
-    return x.rolling(d, min_periods=d)
+    return x.rolling(d, min_periods=min_valid(d))
 
 
 def ts_sum(x: Frame, d: int) -> Frame:
@@ -50,76 +59,84 @@ def ts_max(x: Frame, d: int) -> Frame:
     return _roll(x, d).max()
 
 
+def _pairs_valid(x: Frame, y: Frame, d: int) -> Frame:
+    return (x.notna() & y.notna()).astype(float).rolling(int(d), min_periods=1).sum() >= min_valid(d)
+
+
 def ts_corr(x: Frame, y: Frame, d: int) -> Frame:
-    """滚动相关系数。窗口里数据完整、但有一边是常数（方差为 0）时记 0，不记缺失：
+    """滚动相关系数，只用两边都有值的日子。有效天数够、但有一边是常数（方差为 0）时记 0，不记缺失：
     否则缺失会顺着后面的时间窗口一路扩散（Alpha101 里对短窗口排名求相关很常见）。"""
-    out = _roll(x, d).corr(y).replace([np.inf, -np.inf], np.nan)
-    complete = (x.notna() & y.notna()).astype(float).rolling(int(d), min_periods=int(d)).sum() == int(d)
-    return out.mask(out.isna() & complete, 0.0)
+    valid = _pairs_valid(x, y, d)
+    xm, ym = x.where(y.notna()), y.where(x.notna())
+    out = _roll(xm, d).corr(ym).replace([np.inf, -np.inf], np.nan)
+    return out.mask(out.isna() & valid, 0.0).where(valid)
 
 
 def ts_cov(x: Frame, y: Frame, d: int) -> Frame:
-    return _roll(x, d).cov(y)
+    valid = _pairs_valid(x, y, d)
+    return _roll(x.where(y.notna()), d).cov(y.where(x.notna())).where(valid)
 
 
-def _nan_window(arr: np.ndarray, d: int) -> np.ndarray:
-    """窗口（当天往前 d 天）里有没有缺失、窗口满不满。"""
-    isnan = np.isnan(arr)
-    out = isnan.copy()
+def _valid_count(arr: np.ndarray, d: int) -> np.ndarray:
+    """窗口（当天往前 d 天）里有值的天数。"""
+    ok = (~np.isnan(arr)).astype(np.int32)
+    out = ok.copy()
     for k in range(1, d):
-        out[k:] |= isnan[:-k]
-    out[: d - 1] = True
+        out[k:] += ok[:-k]
     return out
 
 
-def _finish(x: Frame, values: np.ndarray, nan_any: np.ndarray) -> Frame:
+def _finish(x: Frame, values: np.ndarray, enough: np.ndarray) -> Frame:
     values = values.astype(float)
-    values[nan_any] = np.nan
+    values[~enough] = np.nan
     return pd.DataFrame(values, index=x.index, columns=x.columns)
 
 
 def ts_product(x: Frame, d: int) -> Frame:
     d = int(d)
     arr = x.to_numpy(dtype=float)
-    acc = arr.copy()
+    filled = np.where(np.isnan(arr), 1.0, arr)
+    acc = filled.copy()
     for k in range(1, d):
-        acc[k:] *= arr[:-k]
-    return _finish(x, acc, _nan_window(arr, d))
+        acc[k:] *= filled[:-k]
+    return _finish(x, acc, _valid_count(arr, d) >= min_valid(d))
 
 
 def ts_rank(x: Frame, d: int) -> Frame:
-    """当天的值在过去 d 天里排第几（1 = 最小，并列取平均）。"""
+    """当天的值在过去 d 天（有值的日子）里排第几（1 = 最小，并列取平均）。当天没有值就是缺失。"""
     d = int(d)
     cur = x.to_numpy(dtype=float)
     less = np.zeros(cur.shape, dtype=np.float32)
     equal = np.ones(cur.shape, dtype=np.float32)  # 当天和自己相等
     for k in range(1, d):
-        less[k:] += cur[:-k] < cur[k:]
+        less[k:] += cur[:-k] < cur[k:]       # 和缺失比较结果是 False，缺失的日子自动不算
         equal[k:] += cur[:-k] == cur[k:]
-    return _finish(x, less + (equal + 1) / 2, _nan_window(cur, d))
+    enough = (_valid_count(cur, d) >= min_valid(d)) & ~np.isnan(cur)
+    return _finish(x, less + (equal + 1) / 2, enough)
 
 
 def _arg_extreme(x: Frame, d: int, take_max: bool) -> tuple[np.ndarray, np.ndarray]:
-    """最大（小）值在窗口里的位置：1 = 最早一天，d = 当天；并列取最近的一天。"""
+    """最大（小）值在窗口里的位置：1 = 最早一天，d = 当天；并列取最近的一天；缺失的日子不参与。"""
     arr = x.to_numpy(dtype=float)
-    best = arr.copy()
+    fill = -np.inf if take_max else np.inf
+    best = np.where(np.isnan(arr), fill, arr)
     pos = np.full(arr.shape, float(d))
     for k in range(1, d):
         lag = arr[:-k]
         better = (lag > best[k:]) if take_max else (lag < best[k:])
         best[k:] = np.where(better, lag, best[k:])
         pos[k:] = np.where(better, d - k, pos[k:])
-    return pos, _nan_window(arr, d)
+    return pos, _valid_count(arr, d) >= min_valid(d)
 
 
 def ts_argmax(x: Frame, d: int) -> Frame:
-    pos, nan_any = _arg_extreme(x, int(d), True)
-    return _finish(x, pos, nan_any)
+    pos, enough = _arg_extreme(x, int(d), True)
+    return _finish(x, pos, enough)
 
 
 def ts_argmin(x: Frame, d: int) -> Frame:
-    pos, nan_any = _arg_extreme(x, int(d), False)
-    return _finish(x, pos, nan_any)
+    pos, enough = _arg_extreme(x, int(d), False)
+    return _finish(x, pos, enough)
 
 
 def highday(x: Frame, d: int) -> Frame:
@@ -132,12 +149,19 @@ def lowday(x: Frame, d: int) -> Frame:
 
 
 def _weighted(x: Frame, weights_newest_first: np.ndarray) -> Frame:
+    """加权平均，缺失的日子不算，权重按有值的日子重新归一。"""
     d = len(weights_newest_first)
     arr = x.to_numpy(dtype=float)
-    acc = arr * weights_newest_first[0]
+    ok = ~np.isnan(arr)
+    vals = np.where(ok, arr, 0.0)
+    acc = vals * weights_newest_first[0]
+    wsum = ok * weights_newest_first[0]
     for k in range(1, d):
-        acc[k:] += weights_newest_first[k] * arr[:-k]
-    return _finish(x, acc / weights_newest_first.sum(), _nan_window(arr, d))
+        acc[k:] += weights_newest_first[k] * vals[:-k]
+        wsum[k:] += weights_newest_first[k] * ok[:-k]
+    with np.errstate(invalid="ignore", divide="ignore"):
+        out = acc / wsum
+    return _finish(x, out, _valid_count(arr, d) >= min_valid(d))
 
 
 def decay_linear(x: Frame, d: int) -> Frame:
