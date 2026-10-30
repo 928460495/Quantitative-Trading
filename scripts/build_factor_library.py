@@ -95,13 +95,30 @@ def _qlib_batches(factors: list[FactorDef], codes: list[str], start: str, end: s
     return rows
 
 
+def report_only() -> None:
+    """不重算，只用已有的 health.csv 重写 README。"""
+    table = pd.read_csv(OUT_DIR / "health.csv", index_col="factor", dtype={"error": str})
+    table["error"] = table["error"].fillna("")
+    _write_report(table, argparse.Namespace(segment="train"), len(main_board_codes()))
+
+
+def main_board_codes() -> list[str]:
+    from qt.panel import main_board_instruments
+
+    return main_board_instruments(*segment("train"))
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--segment", default="train", choices=["train", "valid"])
     ap.add_argument("--only", nargs="*", help="只算这几个因子")
     ap.add_argument("--save", action="store_true", help="因子值存到 data/cache/factors/")
     ap.add_argument("--jobs", type=int, default=4)
+    ap.add_argument("--report-only", action="store_true", help="不重算，只用 health.csv 重写 README")
     args = ap.parse_args()
+    if args.report_only:
+        report_only()
+        return
 
     from qt.data import init_qlib
     from qt.panel import load_panel, main_board_instruments
@@ -172,6 +189,9 @@ def _write_report(table: pd.DataFrame, args, n_codes: int) -> None:
         f"- 因子：{len(table)} 个；暂缓纳入 {len(HELD)} 个（原因见 `qt/formulas/*.tsv`）",
         "- **只体检，不检验**：没有算 IC、没有看收益、没有记试验日志",
         "- 覆盖率 = 有价格的格子里因子有值的比例；横截面全相同 = 当天所有股票取值一样",
+        "- 时间序列窗口里最多允许缺 1/4（停牌），用有值的日子算（`qt/ops.py`）",
+        "- \"取值很少\"多是天然离散的因子（上涨天数、高低点位置、比较大小得到的 0/1），不是错误；筛选时注意它们分组会不均匀",
+        "- 用到 baostock 日线（换手率、估值、流通市值）的因子覆盖率偏低：这一版补充数据的日线只有部分股票，补齐后重跑",
         "",
         "## 按来源",
         "",
