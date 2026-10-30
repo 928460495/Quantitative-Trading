@@ -68,7 +68,7 @@ def _qlib_wide(instruments: list[str], fields: dict[str, str], start: str, end: 
 
 
 def _fundamental_wide(dates: pd.DatetimeIndex, instruments: list[str], directory: Path) -> dict[str, pd.DataFrame]:
-    from qt.fundamentals import align_to_days, tidy_reports, ttm, yoy
+    from qt.fundamentals import align_to_days, level_yoy, sue, tidy_reports, ttm, yoy
 
     raw = {n: pd.read_parquet(directory / "reports" / f"{n}.parquet") for n in ["yjbb", "income", "balance", "cashflow"]}
     rec = tidy_reports(raw)
@@ -77,7 +77,10 @@ def _fundamental_wide(dates: pd.DatetimeIndex, instruments: list[str], directory
         rec[f"{f}_ttm"] = ttm(rec, f)
     for f in YOY_FIELDS:
         rec[f"{f}_yoy"] = yoy(rec, f)
-    cols = FUND_FIELDS + [f"{f}_ttm" for f in TTM_FIELDS] + [f"{f}_yoy" for f in YOY_FIELDS]
+    rec["net_profit_sue"] = sue(rec, "net_profit")
+    rec["total_assets_yoy"] = level_yoy(rec, "total_assets")
+    cols = (FUND_FIELDS + [f"{f}_ttm" for f in TTM_FIELDS] + [f"{f}_yoy" for f in YOY_FIELDS]
+            + ["net_profit_sue", "total_assets_yoy"])
     index = pd.MultiIndex.from_product([dates, instruments], names=["datetime", "instrument"])
     aligned = align_to_days(rec, cols, index, dates)
     out = {c: aligned[c].astype(float).unstack("instrument") for c in cols}

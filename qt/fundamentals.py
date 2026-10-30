@@ -108,3 +108,18 @@ def align_to_days(records: pd.DataFrame, cols: list[str], index: pd.MultiIndex, 
     out = merged[cols + ["report_date"]]
     out.index = index
     return out
+
+
+def level_yoy(df: pd.DataFrame, col: str) -> pd.Series:
+    """时点值（如总资产）和去年同季相比的增长率；基数 ≤ 0 时为 NaN。"""
+    w = _wide(df, col)
+    base = w.shift(4)
+    return _back((w / base - 1).where(base > 0), df)
+
+
+def sue(df: pd.DataFrame, col: str, quarters: int = 8) -> pd.Series:
+    """标准化预期外盈余（季节性随机游走）：单季值减去年同季，除以最近 quarters 个这种变化的标准差。"""
+    sq = _single_quarter_wide(df, col)
+    change = sq - sq.shift(4)
+    std = change.rolling(quarters, min_periods=quarters).std()
+    return _back((change / std).where(std > 0), df)

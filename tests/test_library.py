@@ -53,3 +53,15 @@ def test_corrections_are_documented():
     assert set(fixed) == {"gtja002", "gtja010", "gtja052", "gtja083", "gtja099", "gtja100", "gtja111", "gtja116",
                           "gtja127", "gtja131", "gtja159", "gtja180", "gtja188"}
     assert all(f.note for f in fixed.values())
+
+
+def test_all_factors_has_every_family_once():
+    from qt.library import all_factors
+
+    facs = all_factors()
+    names = [f.name for f in facs]
+    assert len(names) == len(set(names))
+    fam = pd.Series([f.family for f in facs]).value_counts().to_dict()
+    assert fam["literature"] == 7 and fam["alpha158"] == 158 and fam["alpha101"] == 101 and fam["alpha191"] == 182
+    assert fam["price_extra"] + fam["fundamental"] == 52
+    assert {f.dialect for f in facs if f.family in ("literature", "alpha158")} == {"qlib"}
