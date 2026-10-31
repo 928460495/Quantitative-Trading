@@ -50,3 +50,24 @@ def test_install_writes_version(tmp_path):
     dl.install(archive, tmp_path / "full_a", "full-a-20261027")
     assert (tmp_path / "full_a" / ".version").read_text() == "full-a-20261027"
     assert (tmp_path / "full_a" / "reports" / "income.parquet").read_bytes() == b"y"
+
+
+def test_replace_swaps_in_new_data_and_drops_old(tmp_path):
+    target = tmp_path / "full_a"
+    dl.replace(_tar(tmp_path / "a.tar", {"daily.parquet": b"old", "stale.parquet": b"s"}), target, "full-a-1")
+    dl.replace(_tar(tmp_path / "b.tar", {"daily.parquet": b"new"}), target, "full-a-2")
+    assert (target / "daily.parquet").read_bytes() == b"new"
+    assert not (target / "stale.parquet").exists()
+    assert (target / ".version").read_text() == "full-a-2"
+
+
+def test_replace_keeps_old_data_when_archive_is_bad(tmp_path):
+    target = tmp_path / "full_a"
+    dl.replace(_tar(tmp_path / "a.tar", {"daily.parquet": b"old"}), target, "full-a-1")
+    with pytest.raises(ValueError):
+        dl.replace(_tar(tmp_path / "evil.tar", {"../x": b"boom"}), target, "full-a-2")
+    assert (target / "daily.parquet").read_bytes() == b"old"
+
+
+def test_tag_from_local_archive_name():
+    assert dl.local_tag(Path("data/full_a_20261101.tar")) == "local-20261101"

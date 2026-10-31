@@ -457,7 +457,8 @@ def main() -> None:
         print("每年覆盖情况（上市股票数 / 有日线 / 各张财务表有数据的股票数）：")
         print(pd.DataFrame.from_dict(meta["coverage"], orient="index").to_string())
         print(f"打包完成：{path}（{size:.0f} MB）")
-        print("下一步：按 data/external/README.md 把这个文件上传到 GitHub Release，然后把 tag 告诉 Claude")
+        print(f"下一步：本机研究运行 python scripts/download_full_a.py --archive {path.relative_to(ROOT)}；"
+              "云端研究按 data/external/README.md 上传到 GitHub Release")
 
 
 if __name__ == "__main__":
