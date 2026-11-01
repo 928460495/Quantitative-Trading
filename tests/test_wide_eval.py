@@ -134,3 +134,93 @@ def test_full_size_rank_ic_is_fast():
     we.rank_ic(f, r)
     we.quantile_excess(f, r)
     assert time.time() - t < 15
+
+
+# ---------- 预处理和中性化（任务 3） ----------
+
+from qt.neutralize import neutralize as long_neutralize  # noqa: E402
+from qt.preprocess import standardize as long_standardize  # noqa: E402
+
+
+def _exposures(seed=20):
+    rng = np.random.default_rng(seed)
+    inds = np.array(["11", "21", "22", "23", "24", "27", "28"])
+    p = np.array([0.3, 0.25, 0.2, 0.12, 0.1, 0.02, 0.01])   # 后两个行业常常不足 5 只，要并入"其他"
+    industry = pd.DataFrame(rng.choice(inds, size=(len(DATES), len(CODES)), p=p), index=DATES, columns=CODES,
+                            dtype=object)
+    industry = industry.mask(rng.random(industry.shape) < 0.05)
+    log_mcap = pd.DataFrame(rng.normal(22, 1, (len(DATES), len(CODES))), index=DATES, columns=CODES)
+    log_mcap = log_mcap.mask(rng.random(log_mcap.shape) < 0.05)
+    return industry, log_mcap
+
+
+def _with_outliers(seed):
+    x = _wide(seed)
+    x.iloc[::7, ::11] *= 50                       # 极端值
+    x.iloc[5] = x.iloc[5].round(0) * 0 + 1.0      # 一天全相同：MAD 为 0，不截
+    return x
+
+
+def test_standardize_matches_long_version():
+    x = _with_outliers(21)
+    got = we.standardize(x)
+    pd.testing.assert_series_equal(_long(got), long_standardize(_long(x)), check_names=False, atol=1e-12)
+
+
+def test_neutralize_matches_long_version():
+    x = we.standardize(_with_outliers(22))
+    industry, log_mcap = _exposures()
+    x.iloc[7, 20:] = np.nan                       # 这天不足 30 只：整行缺失
+    got = we.neutralize(x, industry, log_mcap)
+    want = long_neutralize(_long(x), _long(industry), _long(log_mcap))
+    pd.testing.assert_series_equal(_long(got), want, check_names=False, atol=1e-10)
+    assert got.iloc[7].isna().all()
+
+
+def test_neutral_score_removes_size_but_industry_only_keeps_it():
+    industry, log_mcap = _exposures(23)
+    rng = np.random.default_rng(24)
+    factor = log_mcap + rng.normal(0, 0.5, log_mcap.shape)       # 一个"规模"因子
+    full = we.neutral_score(factor, industry, log_mcap)
+    ind_only = we.neutral_score(factor, industry, log_mcap, size=False)
+    corr = lambda a: a.corrwith(log_mcap, axis=1).mean()
+    assert abs(corr(full)) < 1e-8
+    assert corr(ind_only) > 0.5
+
+
+def test_industry_only_is_within_industry_demeaning():
+    industry, log_mcap = _exposures(25)
+    x = we.standardize(_wide(26, 0))
+    got = we.neutralize(x, industry, log_mcap, size=False)
+    d = DATES[10]
+    ind = industry.loc[d]
+    big = ind.map(ind.value_counts()) >= 5
+    row = x.loc[d].where(ind.notna())
+    # 大行业：减去行业均值；并入"其他"的小行业不设哑变量，残差就是原值；最后在全部有效股票上标准化
+    resid = (row - row.groupby(ind.where(big)).transform("mean")).where(big, row)
+    resid = (resid - resid.mean()) / resid.std()
+    assert (~big & ind.notna()).any()             # 这天确实有并入"其他"的股票
+    pd.testing.assert_series_equal(got.loc[d], resid, check_names=False, atol=1e-10)
+
+
+def test_neutralize_uses_only_same_day_data():
+    x = we.standardize(_wide(27))
+    industry, log_mcap = _exposures(28)
+    changed = x.copy()
+    changed.iloc[40:] = changed.iloc[40:] * 5 + 1
+    a, b = we.neutralize(x, industry, log_mcap), we.neutralize(changed, industry, log_mcap)
+    pd.testing.assert_frame_equal(a.iloc[:40], b.iloc[:40])
+
+
+@pytest.mark.slow
+def test_full_size_neutral_score_is_fast():
+    import time
+
+    rng = np.random.default_rng(0)
+    idx = pd.bdate_range("2009-01-05", periods=2400)
+    x = pd.DataFrame(rng.normal(size=(2400, 2800)), index=idx)
+    industry = pd.DataFrame(rng.integers(0, 31, (2400, 2800)).astype(str), index=idx, dtype=object)
+    log_mcap = pd.DataFrame(rng.normal(22, 1, (2400, 2800)), index=idx)
+    t = time.time()
+    we.neutral_score(x, industry, log_mcap)
+    assert time.time() - t < 20

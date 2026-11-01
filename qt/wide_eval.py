@@ -12,6 +12,8 @@ import numpy as np
 import pandas as pd
 
 from qt.evaluate import MIN_STOCKS, _groups, ic_stats
+from qt.neutralize import MIN_INDUSTRY_SIZE
+from qt.preprocess import MAD_SCALE
 
 ic_summary = ic_stats   # 均值、标准差、ICIR、正值比例、Newey-West t（滞后 持有期 − 1）、天数
 
@@ -78,3 +80,62 @@ def quantile_excess(score: pd.DataFrame, ret: pd.DataFrame, every: int = 5, n_gr
         row["universe"] = r.mean()
         rows[d] = row
     return pd.DataFrame.from_dict(rows, orient="index").sort_index()
+
+
+# ---------- 预处理和中性化：和 qt/preprocess.py、qt/neutralize.py 的长表版一致 ----------
+
+def winsorize_mad(x: pd.DataFrame, n: float = 3.0) -> pd.DataFrame:
+    """每天把超出 中位数 ± n × 1.4826 × MAD 的值截到边界上；当天 MAD 为 0 时不截。"""
+    med = x.median(axis=1)
+    mad = x.sub(med, axis=0).abs().median(axis=1) * MAD_SCALE
+    width = (n * mad).where(mad > 0, np.inf)
+    return x.clip(med - width, med + width, axis=0)
+
+
+def zscore(x: pd.DataFrame) -> pd.DataFrame:
+    return x.sub(x.mean(axis=1), axis=0).div(x.std(axis=1), axis=0)
+
+
+def standardize(x: pd.DataFrame) -> pd.DataFrame:
+    return zscore(winsorize_mad(x))
+
+
+def neutralize(x: pd.DataFrame, industry: pd.DataFrame, log_mcap: pd.DataFrame, size: bool = True,
+               min_industry_size: int = MIN_INDUSTRY_SIZE) -> pd.DataFrame:
+    """每天对申万一级行业哑变量（和标准化后的对数流通市值）回归取残差，再标准化。
+
+    当天不足 min_industry_size 只的行业并入"其他"，"其他"不设哑变量；有效股票少于 30 只的日子整行缺失。
+    size=False 只对行业中性化（规模类因子用，否则规模被中性化掉了）。缺行业（或 size=True 时缺市值）的
+    股票当天不参与。
+    """
+    ind = industry.reindex(index=x.index, columns=x.columns).to_numpy(dtype=object)
+    xv = x.to_numpy(dtype=float)
+    mv = log_mcap.reindex(index=x.index, columns=x.columns).to_numpy(dtype=float)
+    out = np.full(xv.shape, np.nan)
+    for i in range(len(xv)):
+        valid = ~np.isnan(xv[i]) & pd.notna(ind[i])
+        if size:
+            valid &= ~np.isnan(mv[i])
+        if valid.sum() < MIN_STOCKS:
+            continue
+        codes, labels = pd.factorize(ind[i][valid])
+        counts = np.bincount(codes)
+        keep = np.flatnonzero(counts >= min_industry_size)         # 小行业并入"其他"：不设哑变量
+        cols = [(codes == k).astype(float) for k in keep]
+        if size:
+            m = mv[i][valid]
+            sd = m.std(ddof=1)
+            cols.append((m - m.mean()) / sd if sd > 0 else m * 0)
+        y = xv[i][valid]
+        if cols:
+            design = np.column_stack(cols)
+            beta, *_ = np.linalg.lstsq(design, y, rcond=None)
+            y = y - design @ beta
+        out[i, valid] = y
+    return zscore(pd.DataFrame(out, index=x.index, columns=x.columns))
+
+
+def neutral_score(raw: pd.DataFrame, industry: pd.DataFrame, log_mcap: pd.DataFrame, size: bool = True) -> pd.DataFrame:
+    """在当天全部股票上去极值、标准化再中性化（同 qt.pipeline.neutral_score）：已持有但第二天买不进的股票
+    也要有排名，才能决定留还是卖。"""
+    return neutralize(standardize(raw), industry, log_mcap, size=size)
