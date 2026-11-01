@@ -85,3 +85,116 @@ def test_every_nth_day_starts_at_first_valid_day():
     x.iloc[:3] = np.nan
     sub = sw.every_nth_day(x, 5)
     assert sub.index[0] == DATES[3] and sub.index[1] == DATES[8]
+
+
+# ---------- 单个因子的完整检验（任务 6） ----------
+
+from qt import wide_eval as we  # noqa: E402
+
+
+def _ctx(n_days=400, n_stocks=200, seed=80):
+    rng = np.random.default_rng(seed)
+    idx = pd.bdate_range("2010-01-04", periods=n_days)
+    cols = [f"SH600{i:03d}" for i in range(n_stocks)]
+    close = pd.DataFrame(10 * np.exp(np.cumsum(rng.normal(0, 0.02, (n_days, n_stocks)), axis=0)), index=idx, columns=cols)
+    true = pd.DataFrame(True, index=idx, columns=cols)
+    industry = pd.DataFrame(np.array([f"{10 + i % 10}" for i in range(n_stocks)])[None, :].repeat(n_days, 0),
+                            index=idx, columns=cols, dtype=object)
+    log_mcap = pd.DataFrame(rng.normal(22, 1, (n_days, n_stocks)), index=idx, columns=cols)
+    return sw.ScreenContext(close=close, raw_close=close, can_buy=true, can_sell=true, industry=industry,
+                            log_mcap=log_mcap, horizons=(1, 5, 10, 20), main_horizon=5)
+
+
+def test_planted_signal_passes_all_three_checks():
+    ctx = _ctx()
+    fwd = we.forward_returns(ctx.close, [5])[5]
+    noise = pd.DataFrame(np.random.default_rng(81).normal(size=fwd.shape), index=fwd.index, columns=fwd.columns)
+    row, sub = sw.evaluate_factor_wide("planted", fwd.rank(axis=1) + 40 * noise.rank(axis=1) / 200, "动量/反转", ctx)
+    assert row["direction"] == 1 and row["t_nw_5d"] > 3
+    assert row["pass_t"] and row["pass_stable"] and row["pass_cost"] and row["passed"]
+    assert sub is not None and len(sub) == pytest.approx(len(ctx.dates) / 5, abs=1)   # 去掉段尾之后每 5 天一次
+
+
+def test_reversed_signal_gets_negative_direction():
+    ctx = _ctx()
+    fwd = we.forward_returns(ctx.close, [5])[5]
+    row, _ = sw.evaluate_factor_wide("rev", -fwd, "动量/反转", ctx)
+    assert row["direction"] == -1 and row["t_nw_5d"] > 3
+
+
+def test_noise_fails_and_skips_account_backtest():
+    ctx = _ctx()
+    noise = pd.DataFrame(np.random.default_rng(82).normal(size=ctx.close.shape), index=ctx.close.index,
+                         columns=ctx.close.columns)
+    row, sub = sw.evaluate_factor_wide("noise", noise, "价值", ctx)
+    assert not row["pass_t"] and not row["passed"] and sub is None
+    assert np.isnan(row["excess_annual"])                 # 前两条没过，不跑账户回测
+    assert row["fail_reason"].startswith("t 值")
+
+
+def test_size_category_is_only_industry_neutralized():
+    ctx = _ctx()
+    rng = np.random.default_rng(83)
+    f = ctx.log_mcap + rng.normal(0, 0.3, ctx.log_mcap.shape)
+    row_size, _ = sw.evaluate_factor_wide("lnsize", f, "规模", ctx)
+    row_other, _ = sw.evaluate_factor_wide("lnsize", f, "价值", ctx)
+    assert row_size["size_neutralized"] is False and row_other["size_neutralized"] is True
+    assert row_size["rank_ic_5d"] != pytest.approx(row_other["rank_ic_5d"])
+
+
+def test_evaluate_drops_warmup_and_tail():
+    ctx = _ctx()
+    fwd = we.forward_returns(ctx.close, [5])[5]
+    row, _ = sw.evaluate_factor_wide("planted", fwd, "动量/反转", ctx)
+    # 段尾 21 天被去掉（ScreenContext 构造时去掉），IC 天数 ≤ 400 − 21
+    assert row["n_days_5d"] <= 400 - 21
+
+
+def test_wide_masks_match_long_full_a_masks():
+    from qt.universe import full_a_masks
+
+    rng = np.random.default_rng(90)
+    idx = pd.bdate_range("2012-03-01", periods=30)
+    cols = [f"SH600{i:03d}" for i in range(20)] + [f"SZ300{i:03d}" for i in range(5)]   # 创业板不能买
+    amount = pd.DataFrame(rng.uniform(1e6, 1e8, (30, 25)), index=idx, columns=cols)
+    long_idx = pd.MultiIndex.from_product([idx, cols], names=["datetime", "instrument"])
+    pre = rng.uniform(9, 11, len(long_idx))
+    daily = pd.DataFrame({"preclose": pre, "close": pre * rng.choice([1.0, 1.1, 0.9, 1.02], len(long_idx)),
+                          "tradestatus": rng.choice([1, 1, 1, 0], len(long_idx)),
+                          "isST": rng.choice([0, 0, 0, 1], len(long_idx))}, index=long_idx)
+    daily = daily.drop(daily.sample(frac=0.05, random_state=1).index)          # 部分日子没有记录 = 停牌
+    listed = pd.Series(pd.Timestamp("2005-01-04"), index=cols)
+    listed["SH600003"] = pd.Timestamp("2011-12-01")                             # 上市不满一年
+    buy, sell = sw.wide_masks(amount, daily, listed)
+    df = pd.DataFrame({"_amount20": amount.rolling(20, min_periods=1).mean().stack()})
+    df.index.names = ["datetime", "instrument"]
+    want_buy, want_sell = full_a_masks(df, daily, listed)
+    pd.testing.assert_series_equal(_long_bool(buy), want_buy, check_names=False)
+    pd.testing.assert_series_equal(_long_bool(sell), want_sell, check_names=False)
+    assert not buy["SZ300000"].any() and not buy["SH600003"].any()
+
+
+def _long_bool(w):
+    s = w.stack()
+    s.index.names = ["datetime", "instrument"]
+    return s.astype(bool)
+
+
+@pytest.mark.slow
+def test_full_size_one_factor_without_account_is_fast():
+    import time
+
+    rng = np.random.default_rng(0)
+    idx = pd.bdate_range("2009-01-05", periods=2400)
+    cols = [f"SH6{i:05d}" for i in range(2800)]
+    close = pd.DataFrame(10 * np.exp(np.cumsum(rng.normal(0, 0.02, (2400, 2800)), axis=0)), index=idx, columns=cols)
+    true = pd.DataFrame(True, index=idx, columns=cols)
+    industry = pd.DataFrame(rng.integers(10, 41, (2400, 2800)).astype(str), index=idx, columns=cols, dtype=object)
+    log_mcap = pd.DataFrame(rng.normal(22, 1, (2400, 2800)), index=idx, columns=cols)
+    ctx = sw.ScreenContext(close=close, raw_close=close, can_buy=true, can_sell=true, industry=industry,
+                           log_mcap=log_mcap, start="2010-01-01")
+    noise = pd.DataFrame(rng.normal(size=(2400, 2800)), index=idx, columns=cols)
+    t = time.time()
+    row, _ = sw.evaluate_factor_wide("noise", noise, "价值", ctx)
+    assert not row["pass_t"]
+    assert time.time() - t < 30
