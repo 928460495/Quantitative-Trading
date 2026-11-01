@@ -3,7 +3,7 @@ import pandas as pd
 import pytest
 
 from qt.formula import evaluate
-from qt.library import ALPHA101, ALPHA191, HELD, FactorDef
+from qt.library import ALPHA101, ALPHA191, HELD, FactorDef, all_factors
 
 
 def _env(n_days=300, n_stocks=12, seed=0):
@@ -65,3 +65,11 @@ def test_all_factors_has_every_family_once():
     assert fam["literature"] == 7 and fam["alpha158"] == 158 and fam["alpha101"] == 101 and fam["alpha191"] == 182
     assert fam["price_extra"] + fam["fundamental"] == 52
     assert {f.dialect for f in facs if f.family in ("literature", "alpha158")} == {"qlib"}
+
+
+def test_categories_are_the_eight_strategy_classes():
+    # docs/STRATEGY.md 第 7 节：七大类 + 短周期价量（2026-11-01 用户决定）
+    eight = {"动量/反转", "价值", "规模", "低波动", "成长", "质量", "流动性", "短周期价量"}
+    fs = all_factors()
+    assert {f.category for f in fs} == eight
+    assert all(f.category == "短周期价量" for f in fs if f.family in ("alpha101", "alpha191", "alpha158"))

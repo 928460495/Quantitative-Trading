@@ -16,6 +16,8 @@ from typing import Callable
 
 import pandas as pd
 
+SHORT_PV = "短周期价量"  # 第八类（docs/DECISIONS.md 2026-11-01）：Alpha101、Alpha191、Alpha158 和价量相关
+
 FORMULA_DIR = Path(__file__).resolve().parent / "formulas"
 
 
@@ -23,7 +25,7 @@ FORMULA_DIR = Path(__file__).resolve().parent / "formulas"
 class FactorDef:
     name: str
     family: str                      # alpha101 / alpha191 / alpha158 / literature / price_extra / fundamental
-    category: str                    # 说明书第 7 节的大类；公式类价量因子记"价量"
+    category: str                    # 说明书第 7 节的八个大类；公式类价量因子记"短周期价量"
     source: str
     formula: str | None = None       # 公式类因子：实际使用的公式
     dialect: str | None = None       # "wq" 或 "gtja"
@@ -43,7 +45,7 @@ def _load(family: str) -> tuple[list[FactorDef], list[FactorDef]]:
     table = pd.read_csv(FORMULA_DIR / f"{family}.tsv", sep="\t", keep_default_na=False, dtype=str)
     ok, held = [], []
     for r in table.itertuples(index=False):
-        f = FactorDef(name=r.name, family=family, category="价量", source=source, formula=r.formula,
+        f = FactorDef(name=r.name, family=family, category=SHORT_PV, source=source, formula=r.formula,
                       dialect=dialect, original=r.original, note=r.note)
         (ok if r.status == "ok" else held).append(f)
     return ok, held
@@ -121,7 +123,7 @@ FUNDAMENTAL: list[FactorDef] = [
 # ---------- 已有的 Qlib 表达式因子 ----------
 
 _LITERATURE_CATEGORY = {"rev20": "动量/反转", "amt_ratio20": "流动性", "vol20": "低波动", "max20": "低波动",
-                        "amihud20": "流动性", "high52w": "动量/反转", "pv_corr20": "价量"}
+                        "amihud20": "流动性", "high52w": "动量/反转", "pv_corr20": SHORT_PV}
 
 
 def all_factors() -> list[FactorDef]:
@@ -130,6 +132,6 @@ def all_factors() -> list[FactorDef]:
 
     qlib = [FactorDef(name=f"lit_{f.name}", family="literature", category=_LITERATURE_CATEGORY[f.name], source=f.source,
                       formula=f.expr, dialect="qlib", note=f.description) for f in LITERATURE]
-    qlib += [FactorDef(name=f"a158_{f.name}", family="alpha158", category="价量", source="Qlib Alpha158",
+    qlib += [FactorDef(name=f"a158_{f.name}", family="alpha158", category=SHORT_PV, source="Qlib Alpha158",
                        formula=f.expr, dialect="qlib", note=f.description) for f in alpha158()]
     return qlib + ALPHA101 + ALPHA191 + PRICE_EXTRA + FUNDAMENTAL
