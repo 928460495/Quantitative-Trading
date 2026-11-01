@@ -224,3 +224,75 @@ def test_full_size_neutral_score_is_fast():
     t = time.time()
     we.neutral_score(x, industry, log_mcap)
     assert time.time() - t < 20
+
+
+# ---------- 按实际账户规则扣成本（任务 4） ----------
+
+from qt.account import AccountRules  # noqa: E402
+
+
+def _market(n_days=300, n_stocks=60, seed=30, vol=0.02):
+    rng = np.random.default_rng(seed)
+    idx = pd.bdate_range("2012-01-04", periods=n_days)
+    cols = [f"SH600{i:03d}" for i in range(n_stocks)]
+    adj = pd.DataFrame(10 * np.exp(np.cumsum(rng.normal(0, vol, (n_days, n_stocks)), axis=0)), index=idx, columns=cols)
+    true = pd.DataFrame(True, index=idx, columns=cols)
+    industry = pd.DataFrame(np.array([f"{10 + i % 8}" for i in range(n_stocks)])[None, :].repeat(n_days, 0),
+                            index=idx, columns=cols, dtype=object)
+    return adj, true, industry
+
+
+def test_screen_rules_are_account_defaults_without_drawdown_stop():
+    assert we.SCREEN_RULES == AccountRules(drawdown_stop=None)
+
+
+def test_equal_weight_benchmark_by_hand():
+    idx = pd.bdate_range("2012-01-04", periods=4)
+    adj = pd.DataFrame({"A": [10, 10, 11, 11.0], "B": [10, 10, 10, 12.0]}, index=idx)
+    can_buy = pd.DataFrame({"A": [True, True, True, True], "B": [False, True, True, True]}, index=idx)
+    b = we.buyable_benchmark(adj, can_buy)
+    # 第 t 天的收益：信号日 t−2 能买、t−1 收盘买进的股票，t−1 → t 的平均收益
+    # 第 2 天：信号日 0 只有 A 能买 → +10%；第 3 天：A、B 都能买 → (0 + 20%) / 2
+    assert b.iloc[2] == pytest.approx(0.10) and b.iloc[3] == pytest.approx(0.10)
+    assert b.iloc[:2].tolist() == [0.0, 0.0]
+
+
+def test_perfect_foresight_beats_benchmark():
+    adj, true, industry = _market()
+    score = we.forward_returns(adj, [1])[1]          # 信号日就知道 T+1 → T+2 的收益
+    res = we.account_excess(score, adj, adj, true, true, industry)
+    assert res["excess_annual"] > 1.0
+    assert res["n_trades"] > 100
+
+
+def test_flat_market_loses_only_costs():
+    adj, true, industry = _market(vol=0.0)
+    score = pd.DataFrame(np.random.default_rng(31).normal(size=adj.shape), index=adj.index, columns=adj.columns)
+    res = we.account_excess(score, adj, adj, true, true, industry)
+    assert res["bench_annual"] == pytest.approx(0.0)
+    assert res["annual_return"] < 0 and res["excess_annual"] < 0
+    assert res["cost_annual"] > 0
+
+
+def test_account_excess_ignores_drawdown_stop():
+    adj, true, industry = _market(vol=0.0)
+    adj.iloc[50:] *= 0.5                              # 全市场腰斩：开了回撤兜底就会清仓
+    score = pd.DataFrame(np.random.default_rng(32).normal(size=adj.shape), index=adj.index, columns=adj.columns)
+    res = we.account_excess(score, adj, adj, true, true, industry)
+    assert res["n_drawdown_sells"] == 0
+
+
+@pytest.mark.slow
+def test_full_size_account_backtest_is_fast():
+    import time
+
+    rng = np.random.default_rng(0)
+    idx = pd.bdate_range("2010-01-04", periods=2200)
+    cols = [f"SH6{i:05d}" for i in range(2800)]
+    adj = pd.DataFrame(10 * np.exp(np.cumsum(rng.normal(0, 0.02, (2200, 2800)), axis=0)), index=idx, columns=cols)
+    true = pd.DataFrame(True, index=idx, columns=cols)
+    industry = pd.DataFrame(rng.integers(10, 41, (2200, 2800)).astype(str), index=idx, columns=cols, dtype=object)
+    score = pd.DataFrame(rng.normal(size=(2200, 2800)), index=idx, columns=cols)
+    t = time.time()
+    we.account_excess(score, adj, adj, true, true, industry)
+    assert time.time() - t < 60

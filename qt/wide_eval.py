@@ -11,7 +11,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from qt.evaluate import MIN_STOCKS, _groups, ic_stats
+from qt.account import TRADING_DAYS, AccountRules, MarketData, run_account
+from qt.evaluate import MIN_STOCKS, _groups, ic_stats, newey_west_t
 from qt.neutralize import MIN_INDUSTRY_SIZE
 from qt.preprocess import MAD_SCALE
 
@@ -139,3 +140,71 @@ def neutral_score(raw: pd.DataFrame, industry: pd.DataFrame, log_mcap: pd.DataFr
     """在当天全部股票上去极值、标准化再中性化（同 qt.pipeline.neutral_score）：已持有但第二天买不进的股票
     也要有排名，才能决定留还是卖。"""
     return neutralize(standardize(raw), industry, log_mcap, size=size)
+
+
+# ---------- 按实际账户规则扣成本（通过条件第三条） ----------
+
+# docs/DECISIONS.md 2026-11-01：账户规则用默认值，不用仓位控制 A（不传 exposure）、不用回撤兜底 C
+SCREEN_RULES = AccountRules(drawdown_stop=None)
+
+
+def buyable_benchmark(adj_close: pd.DataFrame, can_buy: pd.DataFrame) -> pd.Series:
+    """能买的股票每天等权的收益：第 t 天 = 信号日 t−2 能买（t−1 收盘买进）的股票 t−1 → t 的平均收益。
+
+    和账户同样的时间约定，不扣成本，每天重新等权。前两天没有持仓，记 0。
+    """
+    r = adj_close / adj_close.shift(1) - 1
+    held = can_buy.reindex(index=adj_close.index, columns=adj_close.columns, fill_value=False).astype(bool).shift(2)
+    held = held.fillna(False).astype(bool)
+    return r.where(held).mean(axis=1).fillna(0.0)
+
+
+def _market_data(score, adj_close, raw_close, can_buy, can_sell, industry) -> MarketData:
+    idx, cols = adj_close.index, adj_close.columns
+    al = lambda x, fill: x.reindex(index=idx, columns=cols, fill_value=fill)
+    ind = None
+    if industry is not None:
+        ind = al(industry, None).to_numpy(dtype=object, copy=True)   # pandas 3 可能返回只读数组
+        ind[pd.isna(ind)] = None                     # 缺行业不受行业上限限制（同 qt.account._industry）
+    return MarketData(
+        dates=pd.DatetimeIndex(idx), instruments=pd.Index(cols),
+        score=al(score, np.nan).to_numpy(dtype=float),
+        adj_close=adj_close.to_numpy(dtype=float),
+        raw_close=al(raw_close, np.nan).to_numpy(dtype=float),
+        can_buy=al(can_buy, False).to_numpy(dtype=bool),
+        can_sell=al(can_sell, False).to_numpy(dtype=bool),
+        industry=ind,
+    )
+
+
+def account_excess(score: pd.DataFrame, adj_close: pd.DataFrame, raw_close: pd.DataFrame, can_buy: pd.DataFrame,
+                   can_sell: pd.DataFrame, industry: pd.DataFrame | None, rules: AccountRules = SCREEN_RULES) -> dict:
+    """按因子打分、按实际账户规则回测，和能买股票的等权收益比。score 越大越好（方向先调好），按信号日对齐。
+
+    年化都是复合年化，区间相同。excess_annual > 0 是通过条件第三条。
+    """
+    result = run_account(_market_data(score, adj_close, raw_close, can_buy, can_sell, industry), rules)
+    daily = result.daily
+    nav = daily["nav"]
+    n = len(nav) - 1
+    bench = buyable_benchmark(adj_close, can_buy).reindex(nav.index).fillna(0.0)
+    bench_nav = (1 + bench).cumprod()
+    annual = (nav.iloc[-1] / nav.iloc[0]) ** (TRADING_DAYS / n) - 1
+    bench_annual = (bench_nav.iloc[-1] / bench_nav.iloc[0]) ** (TRADING_DAYS / n) - 1
+    trades = result.trades
+    sold = trades[trades["side"] == "sell"].groupby("date")["value"].sum().reindex(nav.index, fill_value=0.0)
+    excess_daily = nav.pct_change().iloc[1:] - bench.iloc[1:]
+    reasons = trades["reason"].value_counts()
+    return {
+        "annual_return": float(annual),
+        "bench_annual": float(bench_annual),
+        "excess_annual": float(annual - bench_annual),
+        "excess_t": float(newey_west_t(excess_daily, lag=0)),
+        "max_drawdown": float((nav / nav.cummax() - 1).min()),
+        "turnover": float((sold / nav).iloc[1:].mean()),
+        "cost_annual": float((daily["cost"] / nav).iloc[1:].mean() * TRADING_DAYS),
+        "avg_holdings": float(daily["n_holdings"].iloc[1:].mean()),
+        "n_trades": int(len(trades)),
+        "n_stops": int(reasons.get("stop", 0)),
+        "n_drawdown_sells": int(reasons.get("drawdown", 0)),
+    }
