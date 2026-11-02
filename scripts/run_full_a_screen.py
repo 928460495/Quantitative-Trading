@@ -15,11 +15,14 @@
 from __future__ import annotations
 
 import argparse
+import json
 import multiprocessing as mp
+import shutil
 import sys
 import time
 import warnings
 from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
 from typing import Callable
 
@@ -37,6 +40,7 @@ from qt.trials import TRIALS_FILE, count_unique, log_trial  # noqa: E402
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 SINGLE_DIR = ROOT / "reports" / "single_factor" / "full_a_train_neutral"
 SELECT_DIR = ROOT / "reports" / "screening" / "full_a_train_neutral"
+CACHE_ROOT = ROOT / "data" / "cache" / "screen_full_a"   # 不进仓库
 WARMUP_START = "2009-01-05"
 CATEGORY_ORDER = ["动量/反转", "价值", "规模", "低波动", "成长", "质量", "流动性", "短周期价量"]
 QLIB_BATCH = 20
@@ -61,18 +65,50 @@ def _evaluate_star(args):
     return _evaluate(*args)
 
 
+def _save(cache_dir: Path, row: dict, sub: pd.DataFrame | None) -> None:
+    """一个因子算完就存下来：中途被打断，重跑时跳过已经算完的。先写临时文件再改名，不会留下半个文件。"""
+    name = row["factor"]
+    if sub is not None:
+        tmp = cache_dir / f".{name}.parquet"
+        sub.to_parquet(tmp)
+        tmp.replace(cache_dir / f"{name}.parquet")
+    tmp = cache_dir / f".{name}.json"
+    tmp.write_text(json.dumps(row, ensure_ascii=False, default=lambda o: o.item() if hasattr(o, "item") else str(o)))
+    tmp.replace(cache_dir / f"{name}.json")
+
+
+def _load(cache_dir: Path, names: list[str]) -> tuple[list[dict], dict[str, pd.DataFrame]]:
+    rows, subs = [], {}
+    for name in names:
+        path = cache_dir / f"{name}.json"
+        if not path.exists():
+            continue
+        rows.append(json.loads(path.read_text()))
+        if (cache_dir / f"{name}.parquet").exists():
+            subs[name] = pd.read_parquet(cache_dir / f"{name}.parquet")
+    return rows, subs
+
+
 def run_screen(ctx: ScreenContext, factors: list[FactorDef], compute: Callable[[FactorDef], pd.DataFrame],
                jobs: int = 1, parent_compute: Callable[[list[FactorDef]], dict] | None = None,
-               on_result: Callable[[dict], None] | None = None) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
+               on_result: Callable[[dict], None] | None = None, cache_dir: Path | None = None
+               ) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
     """逐个检验。compute 在子进程里算一个因子；parent_compute 在主进程里成批算（Qlib 表达式，不能在子进程里调）。
 
+    cache_dir：每个因子算完就存进去；里面已有的因子直接读，不重算、不重记试验日志（出错的不存，重跑会再试）。
     返回 (summary：每个因子一行, 通过的因子每 5 天一次的调好方向的中性化值)。
     """
     _CTX.update(ctx=ctx, factors={f.name: f for f in factors}, compute=compute)
-    in_parent = [f for f in factors if parent_compute and f.dialect == "qlib"]
-    in_child = [f for f in factors if f not in in_parent]
+    rows, subs = ([], {}) if cache_dir is None else _load(cache_dir, [f.name for f in factors])
+    if cache_dir is not None:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        if rows:
+            print(f"  已经算完 {len(rows)} 个（{cache_dir}），跳过", flush=True)
+    done = {r["factor"] for r in rows}
+    todo = [f for f in factors if f.name not in done]
+    in_parent = [f for f in todo if parent_compute and f.dialect == "qlib"]
+    in_child = [f for f in todo if f not in in_parent]
     tasks = [[(f.name, None) for f in in_child]]
-    rows, subs = [], {}
     t0 = time.time()
 
     def batches():
@@ -86,6 +122,8 @@ def run_screen(ctx: ScreenContext, factors: list[FactorDef], compute: Callable[[
             rows.append(row)
             if sub is not None:
                 subs[row["factor"]] = sub
+            if cache_dir is not None and not row.get("error"):
+                _save(cache_dir, row, sub)
             if on_result:
                 on_result(row)
             if len(rows) % 25 == 0:
@@ -213,6 +251,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--jobs", type=int, default=1, help="并行进程数")
     ap.add_argument("--factors", nargs="*", help="只跑这几个（调试用：不写最终名单、不记试验日志）")
+    ap.add_argument("--fresh", action="store_true", help="清掉已经算完的中间结果，从头算")
     args = ap.parse_args()
 
     from qt.config import segment
@@ -236,9 +275,16 @@ def main() -> None:
         return {f.name: frames[f.name].reindex(index=ctx.close.index, columns=ctx.close.columns) for f in batch}
 
     debug = bool(args.factors)
+    cache_dir = None if debug else CACHE_ROOT / version.replace("/", "_")
+    if cache_dir is not None and args.fresh:
+        shutil.rmtree(cache_dir, ignore_errors=True)
     print(f"检验 {len(factors)} 个因子，{args.jobs} 个进程 ...", flush=True)
-    summary, subs = run_screen(ctx, factors, compute, args.jobs, parent_compute,
-                               on_result=None if debug else trial_logger(version))
+    try:
+        summary, subs = run_screen(ctx, factors, compute, args.jobs, parent_compute,
+                                   on_result=None if debug else trial_logger(version), cache_dir=cache_dir)
+    except BrokenProcessPool:
+        sys.exit(f"有一个子进程被系统强制结束了，多半是内存不够。已经算完的保存在 {cache_dir}，"
+                 f"把 --jobs 改小（比如 {max(args.jobs // 2, 1)}）重跑同一条命令，会接着算剩下的。")
     context = (f"样本：全 A 主板 {len(codes)} 只（含退市），训练段 {ctx.dates[0].date()} ~ {ctx.dates[-1].date()}"
                f"（段尾去掉 {ctx.tail} 个交易日），{len(ctx.dates)} 个交易日；能买的格子占 {buy_share:.1%}；"
                f"数据版本 `{version}`")

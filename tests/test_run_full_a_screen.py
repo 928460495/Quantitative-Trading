@@ -74,3 +74,41 @@ def test_end_to_end(tmp_path, jobs):
     logged = [json.loads(line) for line in trials.read_text().splitlines()]
     assert len(logged) == len(defs) - 1                                 # 出错的不记
     assert {r["params"]["market"] for r in logged} == {"full_a_main"}
+
+
+def test_resume_from_cache_skips_finished_factors(tmp_path):
+    ctx = _ctx()
+    defs, compute, parent_compute = _factors(ctx)
+    cache = tmp_path / "cache"
+    trials = tmp_path / "trials.jsonl"
+    first, subs1 = script.run_screen(ctx, defs, compute, 1, parent_compute,
+                                     on_result=script.trial_logger("test", trials), cache_dir=cache)
+    n_logged = len(trials.read_text().splitlines())
+
+    def boom(*_):
+        raise AssertionError("已经算完的不该再算")
+
+    # 出错的 broken 没存，会再试一次；其余都从缓存读
+    retry = [f for f in defs if f.name == "broken"]
+    second, subs2 = script.run_screen(ctx, defs, lambda f: compute(f) if f in retry else boom(), 1, boom,
+                                      on_result=script.trial_logger("test", trials), cache_dir=cache)
+    cols = ["direction", "rank_ic_5d", "t_nw_5d", "passed", "excess_annual"]
+    pd.testing.assert_frame_equal(second[cols], first[cols], check_dtype=False)
+    assert set(subs2) == set(subs1)
+    pd.testing.assert_frame_equal(subs2["planted"], subs1["planted"], check_freq=False)
+    assert len(trials.read_text().splitlines()) == n_logged          # 缓存里的不重记试验日志
+
+
+def test_interrupted_run_keeps_finished_factors(tmp_path):
+    ctx = _ctx()
+    defs, compute, parent_compute = _factors(ctx)
+    cache = tmp_path / "cache"
+
+    def stop_at_noise(f):
+        if f.name == "noise":
+            raise KeyboardInterrupt
+        return compute(f)
+
+    with pytest.raises(KeyboardInterrupt):
+        script.run_screen(ctx, defs, stop_at_noise, 1, parent_compute, cache_dir=cache)
+    assert {p.stem for p in cache.glob("*.json")} == {"planted", "planted_twin"}
