@@ -154,8 +154,8 @@ def buyable_benchmark(adj_close: pd.DataFrame, can_buy: pd.DataFrame) -> pd.Seri
     和账户同样的时间约定，不扣成本，每天重新等权。前两天没有持仓，记 0。
     """
     r = adj_close / adj_close.shift(1) - 1
-    held = can_buy.reindex(index=adj_close.index, columns=adj_close.columns, fill_value=False).astype(bool).shift(2)
-    held = held.fillna(False).astype(bool)
+    held = can_buy.reindex(index=adj_close.index, columns=adj_close.columns, fill_value=False).astype(bool)
+    held = held.shift(2, fill_value=False)
     return r.where(held).mean(axis=1).fillna(0.0)
 
 

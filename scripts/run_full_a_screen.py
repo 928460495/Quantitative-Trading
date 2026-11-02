@@ -243,8 +243,12 @@ def main() -> None:
                f"（段尾去掉 {ctx.tail} 个交易日），{len(ctx.dates)} 个交易日；能买的格子占 {buy_share:.1%}；"
                f"数据版本 `{version}`")
     if debug:
-        print(summary[["category", "direction", "rank_ic_5d", "icir_5d", "t_nw_5d", "reversed_year_ratio",
-                       "excess_annual", "fail_reason"]].round(4).to_string())
+        with pd.option_context("display.width", 250, "display.max_columns", 30):
+            print(summary[["category", "direction", "rank_ic_5d", "icir_5d", "t_nw_5d", "reversed_year_ratio",
+                           "fail_reason"]].round(4).to_string())
+            print("\n账户回测（只有前两条都过的因子才跑）：")
+            print(summary[["annual_return", "bench_annual", "excess_annual", "turnover", "cost_annual",
+                           "n_trades", "avg_holdings", "n_stops", "max_drawdown"]].round(4).to_string())
         return
     selection, corr = select(summary, subs)
     write_reports(summary, selection, corr, context)
