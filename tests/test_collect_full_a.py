@@ -331,3 +331,49 @@ def test_collect_daily_backs_off_after_consecutive_failures(tmp_path, monkeypatc
     status = collect.collect_daily(bs, codes, tmp_path, retries=1, backoff_after=10, backoff_seconds=300)
     assert 300 in slept                       # 连续 10 只失败后停 5 分钟
     assert status[codes[10]] == "ok" and status[codes[11]] == "ok"
+
+
+def _spans_dir(tmp_path, files: dict[str, list[str]]):
+    d = tmp_path / "daily"
+    d.mkdir()
+    for inst, dates in files.items():
+        _daily_frame(inst, dates).to_csv(d / f"{inst}.csv", index=False)
+    return d
+
+
+STOCKS = pd.DataFrame({
+    "instrument": ["SH600028", "SH600690", "SZ000002", "SZ000003", "SH603999", "SZ000004"],
+    "name": ["截断", "完整", "退市完整", "早退市", "新股缺头", "空文件"],
+    "ipo_date": ["2001-08-08", "1993-11-19", "1991-01-29", "1991-01-14", "2015-06-01", "1991-01-14"],
+    "out_date": ["", "", "2016-03-01", "2002-06-14", "", ""],
+})
+
+
+def test_daily_spans_reads_first_and_last_date(tmp_path):
+    d = _spans_dir(tmp_path, {"SH600000": ["2009-01-05", "2010-06-01", "2026-10-30"]})
+    pd.DataFrame(columns=collect.DAILY_FIELDS.split(",")).to_csv(d / "SZ000004.csv", index=False)
+    spans = collect.daily_spans(d)
+    assert spans.loc["SH600000", "first"] == pd.Timestamp("2009-01-05")
+    assert spans.loc["SH600000", "last"] == pd.Timestamp("2026-10-30")
+    assert pd.isna(spans.loc["SZ000004", "last"])
+
+
+def test_incomplete_daily_flags_truncated_and_missing_but_not_complete_or_early_delisted():
+    spans = pd.DataFrame({
+        "first": pd.to_datetime(["2009-01-05", "2009-01-05", "2009-01-05", "2016-01-04", None]),
+        "last": pd.to_datetime(["2017-03-28", "2026-10-30", "2016-02-26", "2026-10-30", None]),
+    }, index=["SH600028", "SH600690", "SZ000002", "SH603999", "SZ000004"])
+    bad = collect.incomplete_daily(STOCKS, spans, start="2009-01-01")
+    # 截断在 2017 年的、上市后半年才有数据的、有上市记录却是空文件的；
+    # 退市前 3 天才停的算完整；2009 年前就退市的（没有文件）不该有数据
+    assert sorted(bad.index) == ["SH600028", "SH603999", "SZ000004"]
+    assert bad.loc["SH600028", "expected_last"] == pd.Timestamp("2026-10-30")
+
+
+def test_quarantine_moves_files_so_daily_refetches_them(tmp_path):
+    raw = tmp_path
+    _spans_dir(tmp_path, {"SH600028": ["2009-01-05"], "SH600690": ["2009-01-05"]})
+    assert collect.quarantine(raw, ["SH600028"]) == 1
+    assert not (raw / "daily" / "SH600028.csv").exists()
+    assert (raw / "daily_incomplete" / "SH600028.csv").exists()
+    assert (raw / "daily" / "SH600690.csv").exists()

@@ -14,7 +14,8 @@
 
 用法（先 pip install -r requirements-collect.txt）：
     python scripts/collect_full_a.py               # 全部：股票列表 → 日线 → 财务 → 指数 → 打包
-    python scripts/collect_full_a.py --part daily  # 只跑某一步（list、daily、reports、index、pack）
+    python scripts/collect_full_a.py --part daily  # 只跑某一步（list、daily、check、reports、index、pack）
+    python scripts/collect_full_a.py --part check --fix   # 查日线是否完整，不完整的移走以便重新下载
 
 日线要逐只股票请求，约 5500 只，大约 1–3 小时；财务按报告期请求，约 300 次。
 跑完会在 data/ 下生成 full_a_<日期>.tar，按 data/external/README.md 上传到 GitHub Release。
@@ -296,6 +297,54 @@ def coverage(stocks: pd.DataFrame, daily: pd.DataFrame, reports: dict[str, pd.Da
     return pd.DataFrame.from_dict(rows, orient="index")
 
 
+def daily_spans(daily_dir: Path) -> pd.DataFrame:
+    """每只股票日线文件的第一天和最后一天（只读日期列）；只有表头的文件两者都是空。"""
+    rows = {}
+    for path in sorted(daily_dir.glob("*.csv")):
+        dates = pd.to_datetime(pd.read_csv(path, usecols=["date"])["date"])
+        rows[path.stem] = (dates.min(), dates.max())
+    return pd.DataFrame.from_dict(rows, orient="index", columns=["first", "last"])
+
+
+def incomplete_daily(stocks: pd.DataFrame, spans: pd.DataFrame, start: str = "2009-01-01",
+                     tolerance_days: int = 30) -> pd.DataFrame:
+    """日线没覆盖到应有区间的股票：开头比 max(上市日, start) 晚、结尾比 min(退市日, 最新交易日) 早超过
+    tolerance_days 天，或者应该有数据却没有文件、文件是空的。
+
+    baostock 传到一半断开时可能不报错（2017-03-28 截断的 31 只就是这样），只看"有没有文件"查不出来。
+    停牌日 baostock 也返回一行（交易状态 0），所以正常股票不会因为停牌被误判；退市股的最后交易日
+    通常比退市日早几天，在容差之内。
+    """
+    data_end = spans["last"].max()
+    s = stocks.set_index("instrument")
+    ipo = pd.to_datetime(s["ipo_date"], errors="coerce")
+    out = pd.to_datetime(s["out_date"].replace("", None), errors="coerce")
+    expected_first = ipo.clip(lower=pd.Timestamp(start))
+    expected_last = out.where(out < data_end, data_end).fillna(data_end)
+    should_have = expected_last >= expected_first
+    span = spans.reindex(s.index)
+    tol = pd.Timedelta(days=tolerance_days)
+    bad = should_have & (span["last"].isna()
+                         | (span["first"] > expected_first + tol)
+                         | (span["last"] < expected_last - tol))
+    report = pd.DataFrame({"name": s["name"], "expected_first": expected_first, "first": span["first"],
+                           "expected_last": expected_last, "last": span["last"]})
+    return report[bad]
+
+
+def quarantine(raw_dir: Path, instruments: list[str]) -> int:
+    """把不完整的日线文件移到 daily_incomplete/（不删），再跑 --part daily 就会重新下载它们。"""
+    dest = raw_dir / "daily_incomplete"
+    dest.mkdir(exist_ok=True)
+    moved = 0
+    for inst in instruments:
+        src = raw_dir / "daily" / f"{inst}.csv"
+        if src.exists():
+            os.replace(src, dest / src.name)
+            moved += 1
+    return moved
+
+
 def _status_summary(status: dict[str, dict[str, str]]) -> tuple[dict, dict]:
     counts, failures = {}, {}
     for part, items in status.items():
@@ -382,7 +431,10 @@ def main() -> None:
     import argparse
 
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--part", default="all", choices=["all", "list", "daily", "reports", "index", "pack"])
+    ap.add_argument("--part", default="all", choices=["all", "list", "daily", "check", "reports", "index", "pack"])
+    ap.add_argument("--fix", action="store_true", help="--part check 时把不完整的日线文件移走，再跑 --part daily 重新下载")
+    ap.add_argument("--allow-incomplete", action="store_true",
+                    help="打包时允许有不完整的日线（重新下载后仍然一样，说明 baostock 本身就缺，才用这个）")
     ap.add_argument("--start", default="2009-01-01", help="日线起始日期")
     ap.add_argument("--retries", type=int, default=3)
     ap.add_argument("--pause", type=float, default=0.0, help="每次请求之间停几秒")
@@ -391,7 +443,7 @@ def main() -> None:
     args = ap.parse_args()
     raw_dir: Path = args.raw_dir
     raw_dir.mkdir(parents=True, exist_ok=True)
-    parts = ["list", "daily", "reports", "index", "pack"] if args.part == "all" else [args.part]
+    parts = ["list", "daily", "check", "reports", "index", "pack"] if args.part == "all" else [args.part]
 
     bs = None
     if {"list", "daily"} & set(parts):
@@ -446,6 +498,22 @@ def main() -> None:
         import akshare
 
         _save_status(raw_dir, "index", collect_indexes(akshare, raw_dir))
+    if "check" in parts or "pack" in parts:
+        stocks = pd.read_csv(raw_dir / "stocks.csv", dtype=str, keep_default_na=False)
+        bad = incomplete_daily(stocks, daily_spans(raw_dir / "daily"), start=args.start)
+        if bad.empty:
+            print("日线完整性检查：全部覆盖到应有区间")
+        else:
+            with pd.option_context("display.max_rows", 200, "display.width", 200):
+                print(f"日线完整性检查：{len(bad)} 只没覆盖到应有区间")
+                print(bad.to_string())
+            if args.fix:
+                print(f"已把 {quarantine(raw_dir, list(bad.index))} 个文件移到 daily_incomplete/，"
+                      "现在运行 python scripts/collect_full_a.py --part daily 重新下载")
+                raise SystemExit(0)
+            if "pack" in parts and not args.allow_incomplete:
+                raise SystemExit("有不完整的日线，没有打包。先运行 python scripts/collect_full_a.py --part check --fix，"
+                                 "再 --part daily 重新下载")
     if "pack" in parts:
         path = pack(raw_dir, ROOT / "data", collected_on=pd.Timestamp.today().strftime("%Y%m%d"))
         size = path.stat().st_size / 2**20
@@ -457,7 +525,8 @@ def main() -> None:
         print("每年覆盖情况（上市股票数 / 有日线 / 各张财务表有数据的股票数）：")
         print(pd.DataFrame.from_dict(meta["coverage"], orient="index").to_string())
         print(f"打包完成：{path}（{size:.0f} MB）")
-        print("下一步：按 data/external/README.md 把这个文件上传到 GitHub Release，然后把 tag 告诉 Claude")
+        print(f"下一步：本机研究运行 python scripts/download_full_a.py --archive {path.relative_to(ROOT)}；"
+              "云端研究按 data/external/README.md 上传到 GitHub Release")
 
 
 if __name__ == "__main__":

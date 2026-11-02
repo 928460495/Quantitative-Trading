@@ -1,7 +1,8 @@
 """下载用户上传到本仓库 GitHub Release 的全 A 数据包，解包到 QT_FULL_A_DIR（默认 ~/.qlib/qt_full_a）。
 
 用法：
-    python scripts/download_full_a.py --tag full-a-20261027
+    python scripts/download_full_a.py --tag full-a-20261027          # 从 Release 下载
+    python scripts/download_full_a.py --archive data/full_a_20261101.tar   # 本机打好的包，直接解包
 
 数据包由 scripts/collect_full_a.py 在本地生成，内容见那个脚本的说明。解包后写 .version 记录 tag。
 """
@@ -64,23 +65,44 @@ def _download(url: str, dest: Path) -> None:
     print()
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--tag", required=True, help="Release 的 tag，例如 full-a-20261027")
-    ap.add_argument("--target", type=Path, default=FULL_A_DIR, help=f"解包目录，默认 {FULL_A_DIR}")
-    args = ap.parse_args()
-    target: Path = args.target.expanduser()
-    url = release_asset_url(args.tag)
-    with tempfile.TemporaryDirectory() as tmp:
-        archive = Path(tmp) / Path(url).name
-        _download(url, archive)
-        staging = target.with_name(target.name + ".new")  # 解包成功后再替换，坏包不会弄丢旧数据
+def replace(archive: Path, target: Path, tag: str) -> None:
+    """先解包到旁边的临时目录，成功后再替换 target：坏包不会弄丢旧数据。"""
+    staging = target.with_name(target.name + ".new")
+    shutil.rmtree(staging, ignore_errors=True)
+    try:
+        install(archive, staging, tag)
+    except Exception:
         shutil.rmtree(staging, ignore_errors=True)
-        install(archive, staging, args.tag)
+        raise
     if target.exists():
         shutil.rmtree(target)
     staging.rename(target)
-    print(f"完成：{args.tag}，位于 {target}")
+
+
+def local_tag(archive: Path) -> str:
+    """本机数据包 full_a_YYYYMMDD.tar 记为 local-YYYYMMDD。"""
+    return "local-" + archive.stem.removeprefix("full_a_")
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    src = ap.add_mutually_exclusive_group(required=True)
+    src.add_argument("--tag", help="Release 的 tag，例如 full-a-20261027")
+    src.add_argument("--archive", type=Path, help="本机的数据包，例如 data/full_a_20261101.tar")
+    ap.add_argument("--target", type=Path, default=FULL_A_DIR, help=f"解包目录，默认 {FULL_A_DIR}")
+    args = ap.parse_args()
+    target: Path = args.target.expanduser()
+    if args.archive:
+        tag = local_tag(args.archive)
+        replace(args.archive.expanduser(), target, tag)
+    else:
+        tag = args.tag
+        url = release_asset_url(tag)
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = Path(tmp) / Path(url).name
+            _download(url, archive)
+            replace(archive, target, tag)
+    print(f"完成：{tag}，位于 {target}")
 
 
 if __name__ == "__main__":
