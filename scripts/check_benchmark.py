@@ -55,6 +55,33 @@ def main() -> None:
     print(f"\n年化：基准 {total(bench):.3f}，全部股票等权 {total(every):.3f}，沪深300 {total(hs300.pct_change()):.3f}")
     print(f"基准每天平均收益 {bench.mean():.5f}，中位数 {bench.median():.5f}")
 
+    # 逐条加上能买的过滤条件，看是哪一条让收益掉下来
+    from qt.full_a import listing_dates_full_a
+    from qt.universe import LIQUIDITY_CUT, MIN_LISTED_DAYS
+
+    idx, cols = close.index, close.columns
+    listed = listing_dates_full_a().reindex(cols)
+    age = pd.DataFrame(idx.values[:, None] - listed.values[None, :], index=idx, columns=cols)
+    seasoned = age >= pd.Timedelta(days=MIN_LISTED_DAYS)
+    not_st = ctx.trim(panel["is_st"]).fillna(1) == 0
+    a20 = panel["amount"].rolling(20, min_periods=1).mean().reindex(index=idx, columns=cols)
+    liquid = a20.rank(axis=1, pct=True) > LIQUIDITY_CUT
+    trades_next = close.shift(-1).notna()                                     # T+1 有价格（没停牌）
+    steps = {
+        "1 全部有价格": close.notna(),
+        "2 + 上市满一年": close.notna() & seasoned,
+        "3 + 非 ST（信号日）": close.notna() & seasoned & not_st,
+        "4 + 成交额前 80%": close.notna() & seasoned & not_st & liquid,
+        "5 + T+1 没停牌": close.notna() & seasoned & not_st & liquid & trades_next,
+        "6 能买（再 + T+1 不涨停、T+1 非 ST）": buy,
+    }
+    print("\n逐条加过滤条件（同样 T+1 收盘买入、每天等权）：")
+    rows = {}
+    for name, mask in steps.items():
+        b = buyable_benchmark(close, mask)
+        rows[name] = {**yearly(b).round(3).to_dict(), "年化": round(total(b), 3)}
+    print(pd.DataFrame(rows).T.to_string())
+
     rh = r.where(held)
     big = rh.abs() > LIMIT
     print(f"\n能买股票里单日涨跌幅超过 {LIMIT:.0%} 的格子：{int(big.to_numpy().sum())} 个"
