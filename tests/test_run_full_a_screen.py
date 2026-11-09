@@ -112,3 +112,18 @@ def test_interrupted_run_keeps_finished_factors(tmp_path):
     with pytest.raises(KeyboardInterrupt):
         script.run_screen(ctx, defs, stop_at_noise, 1, parent_compute, cache_dir=cache)
     assert {p.stem for p in cache.glob("*.json")} == {"planted", "planted_twin"}
+
+
+def test_reselect_rebuilds_subs_on_common_grid(tmp_path):
+    ctx = _ctx()
+    defs, compute, parent_compute = _factors(ctx)
+    cache = tmp_path / "cache"
+    first, subs = script.run_screen(ctx, defs, compute, 1, parent_compute, cache_dir=cache)
+    stale = subs["planted"].iloc[3::5]                    # 模拟旧版本按各自起点抽样存下的
+    stale.to_parquet(cache / "planted.parquet")
+    n = script.refresh_subs(ctx, defs, compute, parent_compute, cache)
+    assert n == int(first["passed"].sum())
+    _, fresh = script.run_screen(ctx, defs, lambda f: (_ for _ in ()).throw(AssertionError("不该重算")),
+                                 1, None, cache_dir=cache)
+    pd.testing.assert_frame_equal(fresh["planted"], subs["planted"], check_freq=False)
+    assert fresh["qlib_like"].index.equals(pd.DatetimeIndex(ctx.dates[::5]))

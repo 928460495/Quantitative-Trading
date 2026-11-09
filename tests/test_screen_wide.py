@@ -80,13 +80,6 @@ def test_corr_matrix_symmetric_with_unit_diagonal():
     assert m.loc["a", "a"] == 1.0 and m.loc["a", "b"] == m.loc["b", "a"]
 
 
-def test_every_nth_day_starts_at_first_valid_day():
-    x = _base(70)
-    x.iloc[:3] = np.nan
-    sub = sw.every_nth_day(x, 5)
-    assert sub.index[0] == DATES[3] and sub.index[1] == DATES[8]
-
-
 # ---------- 单个因子的完整检验（任务 6） ----------
 
 from qt import wide_eval as we  # noqa: E402
@@ -198,3 +191,26 @@ def test_full_size_one_factor_without_account_is_fast():
     row, _ = sw.evaluate_factor_wide("noise", noise, "价值", ctx)
     assert not row["pass_t"]
     assert time.time() - t < 30
+
+
+def test_subs_share_one_date_grid_even_when_factors_start_late():
+    """成长类要等 8 期财报才有值，开始得晚；抽样日必须和其他因子对齐，否则相关性算不出来（2026-11-09 修）。"""
+    ctx = _ctx()
+    fwd = we.forward_returns(ctx.close, [5])[5]
+    noise = pd.DataFrame(np.random.default_rng(84).normal(size=fwd.shape), index=fwd.index, columns=fwd.columns)
+    early = fwd.rank(axis=1) + 40 * noise.rank(axis=1) / 200
+    late = early.copy()
+    late.iloc[:37] = np.nan                                # 晚 37 天才有值，37 不是 5 的倍数
+    _, sub_a = sw.evaluate_factor_wide("early", early, "成长", ctx)
+    _, sub_b = sw.evaluate_factor_wide("late", late, "成长", ctx)
+    assert sub_a.index.equals(pd.DatetimeIndex(ctx.dates[::5]))
+    assert sub_b.index.equals(sub_a.index)
+    assert sw.pair_corr(sub_a, sub_b) > 0.9
+
+
+def test_screen_score_is_what_evaluate_keeps():
+    ctx = _ctx()
+    fwd = we.forward_returns(ctx.close, [5])[5]
+    row, sub = sw.evaluate_factor_wide("x", -fwd, "动量/反转", ctx)
+    again = sw.screen_score(-fwd, "动量/反转", row["direction"], ctx)
+    pd.testing.assert_frame_equal(again, sub)

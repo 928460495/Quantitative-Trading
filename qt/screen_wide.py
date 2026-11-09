@@ -4,7 +4,8 @@
 > 0.7 就跳过，每类最多留 3 个；不足就有几个留几个，没有就空着。跨类不去重。
 
 相关性 = 中性化、按方向调整后的因子值，每 5 个交易日一次的横截面 Spearman 相关（两个因子都有值的股票），
-对时间取平均。只算贪心过程中真正要比较的那几对，不算整个相关矩阵：短周期价量一类可能有上百个候选。
+对时间取平均。所有因子用同一组抽样日（检验区间第一天起每 5 天），不按各自第一个有值的日子起算：
+成长类要等 8 期财报才有值，起点不同会让抽样日错开、相关性算不出来（2026-11-09 修正）。只算贪心过程中真正要比较的那几对，不算整个相关矩阵：短周期价量一类可能有上百个候选。
 """
 
 from __future__ import annotations
@@ -19,11 +20,6 @@ from qt.wide_eval import rank_ic
 MAX_PER_CATEGORY = 3
 CORR_THRESHOLD = 0.7
 FULL = f"已满 {MAX_PER_CATEGORY} 个，未比较"
-
-
-def every_nth_day(x: pd.DataFrame, n: int = 5) -> pd.DataFrame:
-    """从第一个有值的日子起，每 n 个交易日取一天。"""
-    return x.loc[x.index[x.notna().any(axis=1)][::n]]
 
 
 def pair_corr(a: pd.DataFrame, b: pd.DataFrame) -> float:
@@ -127,7 +123,7 @@ def evaluate_factor_wide(name: str, raw: pd.DataFrame, category: str, ctx: Scree
     t0 = time.time()
     h = ctx.main_horizon
     size = category != SIZE_CATEGORY
-    score = neutral_score(ctx.trim(raw), ctx.trim(ctx.industry), ctx.trim(ctx.log_mcap), size=size)
+    score = _neutral(raw, category, ctx)
     buy = ctx.trim(ctx.can_buy).fillna(False).astype(bool)
 
     from qt.wide_eval import rank_ic
@@ -167,8 +163,23 @@ def evaluate_factor_wide(name: str, raw: pd.DataFrame, category: str, ctx: Scree
                           "方向反了的年份过半" if not row["pass_stable"] else
                           "扣成本后跑输能买股票等权")
     row["seconds"] = round(time.time() - t0, 1)
-    sub = every_nth_day(signed, h).astype("float32") if row["passed"] else None
+    sub = _sample(signed, ctx) if row["passed"] else None
     return row, sub
+
+
+def _neutral(raw: pd.DataFrame, category: str, ctx: ScreenContext) -> pd.DataFrame:
+    return neutral_score(ctx.trim(raw), ctx.trim(ctx.industry), ctx.trim(ctx.log_mcap),
+                         size=category != SIZE_CATEGORY)
+
+
+def _sample(signed: pd.DataFrame, ctx: ScreenContext) -> pd.DataFrame:
+    """所有因子同一组抽样日：检验区间第一天起每 main_horizon 天一次。"""
+    return signed.loc[ctx.dates[::ctx.main_horizon]].astype("float32")
+
+
+def screen_score(raw: pd.DataFrame, category: str, direction: int, ctx: ScreenContext) -> pd.DataFrame:
+    """通过检验的因子留给相关性去重的值（和 evaluate_factor_wide 返回的一样），不重跑检验。"""
+    return _sample(_neutral(raw, category, ctx) * direction, ctx)
 
 
 def wide_masks(amount: pd.DataFrame, daily: pd.DataFrame, listed: pd.Series) -> tuple[pd.DataFrame, pd.DataFrame]:

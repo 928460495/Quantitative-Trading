@@ -33,7 +33,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from qt.library import FactorDef  # noqa: E402
 from qt.screen_wide import (  # noqa: E402
-    ACCOUNT_KEYS, ScreenContext, corr_matrix, evaluate_factor_wide, select_by_category,
+    ACCOUNT_KEYS, ScreenContext, corr_matrix, evaluate_factor_wide, screen_score, select_by_category,
 )
 from qt.trials import TRIALS_FILE, count_unique, log_trial  # noqa: E402
 
@@ -144,6 +144,30 @@ def run_screen(ctx: ScreenContext, factors: list[FactorDef], compute: Callable[[
     return summary, subs
 
 
+def refresh_subs(ctx: ScreenContext, factors: list[FactorDef], compute: Callable[[FactorDef], pd.DataFrame],
+                 parent_compute: Callable[[list[FactorDef]], dict] | None, cache_dir: Path) -> int:
+    """只为缓存里已经通过的因子重算留给去重的值（统一抽样日），不重跑检验、不记试验日志。返回重算了几个。
+
+    2026-11-09：旧版本按各自第一个有值的日子起抽样，成长类和其他因子错开，相关性算不出来。
+    """
+    rows, _ = _load(cache_dir, [f.name for f in factors])
+    passed = {r["factor"]: r for r in rows if r.get("passed")}
+    todo = [f for f in factors if f.name in passed]
+    raws: dict = {}
+    qlib = [f for f in todo if parent_compute and f.dialect == "qlib"]
+    for i in range(0, len(qlib), QLIB_BATCH):
+        raws |= parent_compute(qlib[i:i + QLIB_BATCH])
+    for k, f in enumerate(todo, 1):
+        raw = raws.pop(f.name) if f.name in raws else compute(f)
+        sub = screen_score(raw, f.category, int(passed[f.name]["direction"]), ctx)
+        tmp = cache_dir / f".{f.name}.parquet"
+        sub.to_parquet(tmp)
+        tmp.replace(cache_dir / f"{f.name}.parquet")
+        if k % 10 == 0:
+            print(f"  重算 {k}/{len(todo)}", flush=True)
+    return len(todo)
+
+
 def select(summary: pd.DataFrame, subs: dict[str, pd.DataFrame]) -> tuple[pd.DataFrame, pd.DataFrame]:
     """类内筛选和选中因子的相关性矩阵。"""
     passed = summary[summary["passed"].fillna(False).astype(bool)]
@@ -252,6 +276,8 @@ def main() -> None:
     ap.add_argument("--jobs", type=int, default=1, help="并行进程数")
     ap.add_argument("--factors", nargs="*", help="只跑这几个（调试用：不写最终名单、不记试验日志）")
     ap.add_argument("--fresh", action="store_true", help="清掉已经算完的中间结果，从头算")
+    ap.add_argument("--reselect", action="store_true",
+                    help="不重跑检验：只为已通过的因子重算去重用的值，再重新筛选、写报告（需要已经跑完一次全量）")
     args = ap.parse_args()
 
     from qt.config import segment
@@ -278,6 +304,14 @@ def main() -> None:
     cache_dir = None if debug else CACHE_ROOT / version.replace("/", "_")
     if cache_dir is not None and args.fresh:
         shutil.rmtree(cache_dir, ignore_errors=True)
+    if args.reselect:
+        if debug or not cache_dir.exists():
+            sys.exit("--reselect 要在跑完一次全量之后用，且不能和 --factors 一起用")
+        missing = [f.name for f in factors if not (cache_dir / f"{f.name}.json").exists()]
+        if missing:
+            sys.exit(f"还有 {len(missing)} 个因子没算完（如 {missing[:3]}），先不加 --reselect 跑完")
+        print(f"重算已通过因子的去重用值 ...", flush=True)
+        print(f"  共 {refresh_subs(ctx, factors, compute, parent_compute, cache_dir)} 个", flush=True)
     print(f"检验 {len(factors)} 个因子，{args.jobs} 个进程 ...", flush=True)
     try:
         summary, subs = run_screen(ctx, factors, compute, args.jobs, parent_compute,
