@@ -323,3 +323,36 @@ def test_exposure_without_matching_dates_is_rejected():
     wrong = pd.Series(0.0, index=pd.bdate_range("2030-01-01", periods=6))
     with pytest.raises(ValueError, match="exposure"):
         run_account(data, POS, exposure=wrong)
+
+
+from qt.account import index_volatility, vol_exposure  # noqa: E402
+
+
+def test_vol_exposure_scales_down_when_volatility_rises():
+    idx = pd.bdate_range("2019-01-02", periods=80)
+    rng = np.random.default_rng(0)
+    r = np.r_[rng.normal(0, 0.01, 40), rng.normal(0, 0.02, 40)]          # 后半段波动翻倍
+    close = pd.Series(1000 * np.exp(np.cumsum(r)), index=idx)
+    sigma = index_volatility(close, window=20)
+    target = sigma.iloc[20:40].median()
+    out = vol_exposure(close, window=20, target=target)
+    assert out.iloc[:20].eq(1.0).all()                                   # 窗口还没满：满仓
+    assert out.max() <= 1.0
+    assert out.iloc[60:].mean() == pytest.approx(0.5, abs=0.15)          # 波动翻倍 → 约一半
+    assert out.iloc[35] == pytest.approx(min(1.0, target / sigma.iloc[35]))
+
+
+def test_vol_exposure_uses_only_data_up_to_that_day():
+    idx = pd.bdate_range("2019-01-02", periods=60)
+    close = pd.Series(1000 * np.exp(np.cumsum(np.random.default_rng(1).normal(0, 0.01, 60))), index=idx)
+    changed = close.copy()
+    changed.iloc[40:] *= np.exp(np.cumsum(np.random.default_rng(2).normal(0, 0.05, 20)))
+    a, b = vol_exposure(close, 20, 0.15), vol_exposure(changed, 20, 0.15)
+    pd.testing.assert_series_equal(a.iloc[:40], b.iloc[:40])
+
+
+def test_index_volatility_is_annualized_std_of_daily_returns():
+    idx = pd.bdate_range("2019-01-02", periods=30)
+    close = pd.Series(np.exp(np.cumsum(np.random.default_rng(3).normal(0, 0.01, 30))) * 100, index=idx)
+    want = close.pct_change().rolling(20).std() * np.sqrt(252)
+    pd.testing.assert_series_equal(index_volatility(close, 20), want, check_names=False)

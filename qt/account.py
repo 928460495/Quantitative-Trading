@@ -18,6 +18,7 @@ import pandas as pd
 from qt.costs import trade_cost
 
 LOT = 100
+TRADING_DAYS = 252
 STAR_MIN_SHARES = 200  # 科创板最少 200 股，之后按 1 股加
 
 
@@ -166,6 +167,17 @@ def trend_exposure(index_close: pd.Series, window: int, low: float) -> pd.Series
     return pd.Series(np.where(ma.isna() | (index_close >= ma), 1.0, low), index=index_close.index)
 
 
+def index_volatility(index_close: pd.Series, window: int = 20) -> pd.Series:
+    """过去 window 天日收益的年化波动率（样本标准差 × √252），只用当天及以前的数据。"""
+    return index_close.pct_change().rolling(window).std() * np.sqrt(TRADING_DAYS)
+
+
+def vol_exposure(index_close: pd.Series, window: int, target: float) -> pd.Series:
+    """波动率控制（说明书第 6 节 B，计划 4 只作对照）：持股比例 = min(1, target / 当前波动率)；波动率还算不出时为 1。"""
+    sigma = index_volatility(index_close, window)
+    return (target / sigma).clip(upper=1.0).where(sigma > 0).fillna(1.0)
+
+
 def run_account(data: MarketData, rules: AccountRules = AccountRules(), exposure: pd.Series | None = None) -> AccountResult:
     """exposure：信号日 → 持股比例（缺失按 1），位置上限 = floor(n_hold × exposure)。
 
@@ -260,8 +272,6 @@ def run_account(data: MarketData, rules: AccountRules = AccountRules(), exposure
                                         "n_buys", "n_sells"]).set_index("date")
     return AccountResult(daily=daily, trades=pd.DataFrame(acct.trades, columns=_TRADE_COLUMNS))
 
-
-TRADING_DAYS = 252
 
 
 def account_metrics(result: AccountResult, bench_close: pd.Series) -> dict[str, float]:
