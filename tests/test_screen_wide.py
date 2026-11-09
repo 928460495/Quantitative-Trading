@@ -214,3 +214,18 @@ def test_screen_score_is_what_evaluate_keeps():
     row, sub = sw.evaluate_factor_wide("x", -fwd, "动量/反转", ctx)
     again = sw.screen_score(-fwd, "动量/反转", row["direction"], ctx)
     pd.testing.assert_frame_equal(again, sub)
+
+
+def test_context_with_no_tail_keeps_every_day():
+    ctx = _ctx()
+    full = sw.ScreenContext(close=ctx.close, raw_close=ctx.raw_close, can_buy=ctx.can_buy, can_sell=ctx.can_sell,
+                            industry=ctx.industry, log_mcap=ctx.log_mcap, tail=0)
+    assert full.dates.equals(pd.DatetimeIndex(ctx.close.index))
+
+
+def test_factor_score_is_daily_version_of_screen_score():
+    ctx = _ctx()
+    fwd = we.forward_returns(ctx.close, [5])[5]
+    daily = sw.factor_score(-fwd, "动量/反转", -1, ctx)
+    assert daily.index.equals(ctx.dates)
+    pd.testing.assert_frame_equal(daily.loc[ctx.dates[::5]].astype("float32"), sw.screen_score(-fwd, "动量/反转", -1, ctx))

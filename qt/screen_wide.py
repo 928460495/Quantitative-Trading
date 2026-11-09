@@ -110,7 +110,7 @@ class ScreenContext:
         idx = self.close.index if self.start is None else self.close.index[self.close.index >= pd.Timestamp(self.start)]
         if len(idx) <= self.tail:
             raise ValueError(f"检验区间只有 {len(idx)} 个交易日，不够去掉 {self.tail} 天")
-        self.dates = pd.DatetimeIndex(idx[:-self.tail])
+        self.dates = pd.DatetimeIndex(idx[:-self.tail] if self.tail else idx)   # tail=0：回测用，不需要远期收益
         self.rets = {h: r.loc[self.dates] for h, r in forward_returns(self.close, list(self.horizons)).items()}
 
     def trim(self, x: pd.DataFrame) -> pd.DataFrame:
@@ -175,6 +175,11 @@ def _neutral(raw: pd.DataFrame, category: str, ctx: ScreenContext) -> pd.DataFra
 def _sample(signed: pd.DataFrame, ctx: ScreenContext) -> pd.DataFrame:
     """所有因子同一组抽样日：检验区间第一天起每 main_horizon 天一次。"""
     return signed.loc[ctx.dates[::ctx.main_horizon]].astype("float32")
+
+
+def factor_score(raw: pd.DataFrame, category: str, direction: int, ctx: ScreenContext) -> pd.DataFrame:
+    """每天的中性化、按方向调整后的因子值（计划 4 合成用），和检验时用的完全一样。"""
+    return _neutral(raw, category, ctx) * direction
 
 
 def screen_score(raw: pd.DataFrame, category: str, direction: int, ctx: ScreenContext) -> pd.DataFrame:
