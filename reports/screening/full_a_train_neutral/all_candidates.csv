@@ -20,8 +20,8 @@ high52w,0.185529,False,已满 3 个，未比较,,,动量/反转
 lit_high52w,0.178263,False,已满 3 个，未比较,,,动量/反转
 sue,0.409306,True,留下,,,成长
 deduct_yoy,0.379999,True,留下,,,成长
-profit_yoy,0.376676,True,留下,,,成长
-revenue_yoy,0.282064,False,已满 3 个，未比较,,,成长
+profit_yoy,0.376676,False,和 deduct_yoy 太像,deduct_yoy,0.812190,成长
+revenue_yoy,0.282064,True,留下,,,成长
 abn_turn,0.500301,True,留下,,,流动性
 turn_12m,0.331949,True,留下,,,流动性
 gtja097,0.749601,True,留下,,,短周期价量
