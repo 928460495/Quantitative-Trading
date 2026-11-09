@@ -5,7 +5,8 @@
 
 规则见 docs/DECISIONS.md 2026-11-09：
 - 不控仓（也不用 C）、A 的 6 个组合（都带 C）、对照 B（带 C）
-- 挑 A：训练段和验证段最大回撤都 ≤ 20% 的组合里，选验证段年化最高的；都不达标就停下，不放宽
+- 挑 A：训练段、验证段最大回撤分别不超过沪深300 全收益同期最大回撤（2026-11-10 改，原来是 20%）的组合里，
+  选验证段年化最高的；都不达标就停下，不放宽
 - 选中之后只报告：持仓 10 只（跌出前 30 名卖）、去掉短周期价量、成本翻倍
 输出 reports/combination/full_a/：README.md、backtest.csv、yearly.csv、chosen.json、nav_<段>.png
 """
@@ -39,7 +40,7 @@ B_NAME = "B_波动率控制"
 SHORT_PV = "短周期价量"
 SEGMENTS = ("train", "valid")
 SEG_CN = {"train": "训练段", "valid": "验证段"}
-METRIC_COLS = ["annual_return", "bench_annual", "excess_annual", "max_drawdown", "volatility", "sharpe",
+METRIC_COLS = ["annual_return", "bench_annual", "excess_annual", "max_drawdown", "bench_max_drawdown", "volatility", "sharpe",
                "avg_exposure", "days_in_cash", "turnover", "cost_annual", "n_stops", "c_triggers"]
 
 
@@ -75,7 +76,8 @@ def run_all(segs: dict[str, dict], trials_path: Path | None = TRIALS_FILE, data_
     table = pd.DataFrame({"train_max_drawdown": wide[("max_drawdown", "train")],
                           "valid_max_drawdown": wide[("max_drawdown", "valid")],
                           "valid_annual": wide[("annual_return", "valid")]})
-    chosen = pc.choose_a(table)
+    limits = {s: -pc.bench_max_drawdown(segs[s]) for s in SEGMENTS}   # 2026-11-10：上限 = 沪深300 全收益同期最大回撤
+    chosen = pc.choose_a(table, train_limit=limits["train"], valid_limit=limits["valid"])
 
     if chosen is not None:
         w, low = next((w, low) for w in pc.A_WINDOWS for low in pc.A_LOWS if pc.a_name(w, low) == chosen)
@@ -92,6 +94,7 @@ def run_all(segs: dict[str, dict], trials_path: Path | None = TRIALS_FILE, data_
         metrics = pd.DataFrame(rows)
 
     return {"metrics": metrics, "yearly": pd.concat(yearly), "navs": navs, "chosen": chosen, "a_table": table,
+            "limits": limits,
             "b_target": target, "bench": {s: segs[s]["index"][pc.BENCH].reindex(segs[s]["close"].index).ffill()
                                           for s in SEGMENTS}}
 
@@ -109,7 +112,9 @@ def write_report(res: dict, out_dir: Path = OUT_DIR, note: str = "") -> None:
                                                     ensure_ascii=False, indent=2))
 
     t = res["a_table"].copy()
-    t["两段回撤都 ≤ 20%"] = (t["train_max_drawdown"] >= -pc.MAX_DRAWDOWN - 1e-12) & (t["valid_max_drawdown"] >= -pc.MAX_DRAWDOWN - 1e-12)
+    lim = res["limits"]
+    t["两段都不超过沪深300同期回撤"] = ((t["train_max_drawdown"] >= -lim["train"] - 1e-12)
+                                       & (t["valid_max_drawdown"] >= -lim["valid"] - 1e-12))
     t["选中"] = t.index == chosen
     a = metrics[metrics["variant"].str.startswith("A_") & ~metrics["variant"].str.contains("｜")]
     piv = a.pivot(index="variant", columns="segment", values="annual_return")
@@ -120,12 +125,13 @@ def write_report(res: dict, out_dir: Path = OUT_DIR, note: str = "") -> None:
         t[c] = t[c].map(_pct)
 
     show = metrics.copy()
-    for c in ("annual_return", "bench_annual", "excess_annual", "max_drawdown", "volatility", "avg_exposure",
+    for c in ("annual_return", "bench_annual", "excess_annual", "max_drawdown", "bench_max_drawdown", "volatility", "avg_exposure",
               "days_in_cash", "turnover", "cost_annual"):
         show[c] = show[c].map(_pct)
     show["sharpe"] = show["sharpe"].map(lambda x: f"{x:.2f}")
     show = show.rename(columns={"variant": "方案", "segment": "段", "annual_return": "年化", "bench_annual": "沪深300全收益",
-                                "excess_annual": "超额", "max_drawdown": "最大回撤", "volatility": "波动",
+                                "excess_annual": "超额", "max_drawdown": "最大回撤", "bench_max_drawdown": "沪深300同期最大回撤",
+                                "volatility": "波动",
                                 "sharpe": "夏普", "avg_exposure": "平均仓位", "days_in_cash": "空仓天数占比",
                                 "turnover": "日均换手", "cost_annual": "年成本", "n_stops": "止损次数",
                                 "c_triggers": "回撤兜底触发"})
@@ -137,10 +143,12 @@ def write_report(res: dict, out_dir: Path = OUT_DIR, note: str = "") -> None:
     if note:
         lines += [note, ""]
     lines += ["## 仓位控制 A 的 6 个组合（都带回撤兜底 C）", "",
-              "挑选规则：训练段和验证段最大回撤都不超过 20% 的组合里，选验证段年化收益最高的；一个都达不到就停下来讨论，不放宽。", "",
+              "挑选规则（2026-11-10 用户改）：训练段、验证段最大回撤分别不超过沪深300 全收益同期最大回撤的组合里，"
+              "选验证段年化收益最高的；一个都达不到就停下来讨论，不放宽。原来的上限是固定 20%。", "",
+              f"沪深300 全收益同期最大回撤：训练段 {-res['limits']['train']:.1%}，验证段 {-res['limits']['valid']:.1%}。", "",
               t.to_markdown(), ""]
     if chosen is None:
-        lines += ["**没有组合在两段上回撤都不超过 20%。按事先写定的规则停下来讨论，不放宽，也不跑后面的变体。**", ""]
+        lines += ["**没有组合在两段上回撤都不超过沪深300 同期最大回撤。按事先写定的规则停下来讨论，不放宽，也不跑后面的变体。**", ""]
     else:
         lines += [f"**选中：{chosen}**", ""]
     lines += ["## 全部方案", "",
@@ -202,7 +210,8 @@ def main() -> None:
     res = run_all(segs, data_version=cache.name)
     write_report(res, note=f"数据版本 `{cache.name}`。")
     print(res["a_table"].round(4).to_string())
-    print(f"选中：{res['chosen']}" if res["chosen"] else "没有组合两段回撤都 ≤ 20%：按规则停下来讨论")
+    print(f"沪深300 全收益同期最大回撤：训练段 {-res['limits']['train']:.1%}，验证段 {-res['limits']['valid']:.1%}")
+    print(f"选中：{res['chosen']}" if res["chosen"] else "没有组合两段回撤都不超过沪深300 同期最大回撤：按规则停下来讨论")
     print(f"报告：{OUT_DIR.relative_to(ROOT)}/README.md")
 
 

@@ -53,6 +53,7 @@ def run_variant(seg: dict, score: pd.DataFrame, rules: AccountRules, exposure: p
     trades = result.trades
     m["c_triggers"] = int(trades.loc[trades["reason"] == "drawdown", "date"].nunique())
     m["days_in_cash"] = float((result.daily["n_holdings"].iloc[1:] == 0).mean())
+    m["bench_max_drawdown"] = bench_max_drawdown(seg)
     return m, result
 
 
@@ -67,12 +68,20 @@ def yearly(result: AccountResult) -> pd.DataFrame:
     return pd.DataFrame.from_dict(rows, orient="index")
 
 
-def choose_a(table: pd.DataFrame, limit: float = MAX_DRAWDOWN) -> str | None:
-    """训练段和验证段最大回撤都不超过 limit 的组合里，选验证段年化收益最高的；都不达标返回 None（不放宽）。
+def bench_max_drawdown(seg: dict) -> float:
+    """这一段沪深300 全收益指数的最大回撤（负数）。"""
+    b = seg["index"][BENCH].reindex(seg["close"].index).ffill().dropna()
+    return float((b / b.cummax() - 1).min())
 
+
+def choose_a(table: pd.DataFrame, train_limit: float = MAX_DRAWDOWN, valid_limit: float = MAX_DRAWDOWN) -> str | None:
+    """训练段、验证段最大回撤分别不超过各自上限的组合里，选验证段年化收益最高的；都不达标返回 None（不放宽）。
+
+    上限是正数。2026-11-10 起用户改为"不超过沪深300 全收益同期最大回撤"，每段用这一段的基准回撤
+    （见 bench_max_drawdown）；原来是固定 20%。
     table：每行一个 A 组合，列 train_max_drawdown、valid_max_drawdown（负数）、valid_annual。
     """
-    ok = table[(table["train_max_drawdown"] >= -limit - 1e-12) & (table["valid_max_drawdown"] >= -limit - 1e-12)]
+    ok = table[(table["train_max_drawdown"] >= -train_limit - 1e-12) & (table["valid_max_drawdown"] >= -valid_limit - 1e-12)]
     if ok.empty:
         return None
     return str(ok["valid_annual"].astype(float).idxmax())

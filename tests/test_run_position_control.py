@@ -22,7 +22,7 @@ def _segs():
 
 
 def test_runs_every_variant_and_applies_the_selection_rule(tmp_path, monkeypatch):
-    monkeypatch.setattr(rpc.pc, "choose_a", lambda table, limit=0.2: rpc.pc.a_name(120, 0.5))
+    monkeypatch.setattr(rpc.pc, "choose_a", lambda *a, **k: rpc.pc.a_name(120, 0.5))
     trials = tmp_path / "trials.jsonl"
     res = rpc.run_all(_segs(), trials_path=trials, data_version="test")
     m = res["metrics"]
@@ -41,7 +41,7 @@ def test_runs_every_variant_and_applies_the_selection_rule(tmp_path, monkeypatch
 
 
 def test_stops_when_no_combination_meets_drawdown_limit(tmp_path, monkeypatch):
-    monkeypatch.setattr(rpc.pc, "choose_a", lambda table, limit=0.2: None)
+    monkeypatch.setattr(rpc.pc, "choose_a", lambda *a, **k: None)
     res = rpc.run_all(_segs(), trials_path=None)
     assert res["chosen"] is None
     assert not res["metrics"]["variant"].str.contains("｜").any()        # 不跑只报告的变体
@@ -51,5 +51,7 @@ def test_stops_when_no_combination_meets_drawdown_limit(tmp_path, monkeypatch):
 
 def test_a_table_feeds_the_real_rule():
     res = rpc.run_all(_segs(), trials_path=None)
-    assert res["chosen"] == rpc.pc.choose_a(res["a_table"])
+    limits = res["limits"]
+    assert res["chosen"] == rpc.pc.choose_a(res["a_table"], train_limit=limits["train"], valid_limit=limits["valid"])
+    assert limits["train"] == pytest.approx(-rpc.pc.bench_max_drawdown(_segs()["train"]))
     assert len(res["a_table"]) == 6

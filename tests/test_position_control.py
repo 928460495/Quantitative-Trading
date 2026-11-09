@@ -89,3 +89,20 @@ def test_moving_average_uses_warmup_before_the_segment():
     seg = _segment(crash_at=5)
     exposure = pc.trend(seg, window=20, low=0.5)
     assert exposure.iloc[5] == 0.5
+
+
+def test_benchmark_drawdown_over_the_segment():
+    seg = _segment()
+    dates = seg["close"].index
+    seg["index"].loc[dates[50]:dates[60], "H00300"] *= 0.8           # 中间跌 20% 再回来
+    assert pc.bench_max_drawdown(seg) == pytest.approx(-0.2, abs=0.01)
+    m, _ = pc.run_variant(seg, seg["composite"], AccountRules(), None)
+    assert m["bench_max_drawdown"] == pytest.approx(pc.bench_max_drawdown(seg))
+
+
+def test_choose_a_with_each_segment_capped_by_its_own_benchmark_drawdown():
+    # 2026-11-10 用户：回撤上限改成"不超过沪深300 全收益同期最大回撤"，训练段、验证段各用各的
+    table = pd.DataFrame({"train_max_drawdown": [-0.30, -0.45, -0.25], "valid_max_drawdown": [-0.15, -0.10, -0.18],
+                          "valid_annual": [0.10, 0.30, 0.05]}, index=["A1", "A2", "A3"])
+    assert pc.choose_a(table, train_limit=0.42, valid_limit=0.17) == "A1"   # A2 训练段超了，A3 验证段超了
+    assert pc.choose_a(table, train_limit=0.20, valid_limit=0.17) is None
