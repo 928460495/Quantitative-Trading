@@ -8,3 +8,4 @@ data/raw/
 .DS_Store
 data/cache/
 data/full_a_*.tar
+reports/plan3c/train/grid.csv

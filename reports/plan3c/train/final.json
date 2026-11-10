@@ -1,0 +1,17 @@
+{
+  "factors": [
+    "turn_12m",
+    "ep_deduct"
+  ],
+  "params": {
+    "n_hold": 15,
+    "rebalance_every": 10,
+    "sell_mult": 3,
+    "industry_cap": 0.2,
+    "tiers": true,
+    "min_trade": 2000.0,
+    "cost_multiplier": 1.0
+  },
+  "smooth": 1,
+  "lowvol_weight": 1.0
+}
