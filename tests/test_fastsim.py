@@ -101,3 +101,14 @@ def test_fastsim_runs_fast():
     t = time.time()
     simulate(data, SimParams())
     assert time.time() - t < 3
+
+
+def test_fastsim_tiers_cap_money_not_just_names():
+    adj, score, true = _wide(30, 8, seed=7, price=10.0)
+    adj.iloc[2:] = 8.3
+    p = SimParams(n_hold=6, rebalance_every=1, sell_mult=1, industry_cap=1.0, tiers=True, min_trade=0)
+    # 用一个第 15 天全体再跌 10% 的冲击量出仓位：仓位 ≤ 1/3 时当天收益 ≥ −3.4%
+    adj2 = adj.copy()
+    adj2.iloc[15:] = 8.3 * 0.9
+    r2 = simulate(_market_data(score, adj2, adj2, true, true, None), p)
+    assert r2.iloc[15] >= -0.1 / 3 - 0.002

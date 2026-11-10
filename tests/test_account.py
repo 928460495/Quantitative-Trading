@@ -420,3 +420,16 @@ def test_rebalance_day_limit_down_keeps_position_until_next_rebalance():
     res = run_account(_scenario(scores, 6, can_sell=can_sell), AccountRules(rebalance_every=2, **ONE))
     sells = res.trades[res.trades["side"] == "sell"]
     assert sells["date"].iloc[0] == pd.bdate_range("2019-01-02", periods=6)[5]    # 信号日 2 卖不出，等到信号日 4
+
+
+def test_tiers_cap_money_not_just_names():
+    # 回撤 17% 进 1/3 档后，持股只数和投入的钱都应该降到约 1/3（复查发现：只限只数时钱会全部回到少数几只里）
+    rng = np.random.default_rng(7)
+    n_days, codes = 30, list("ABCDEFGH")
+    scores = {c: list(rng.normal(size=n_days)) for c in codes}
+    prices = {c: [10.0, 10.0] + [8.3] * (n_days - 2) for c in codes}
+    rules = AccountRules(n_hold=6, sell_rank=6, max_stock_weight=1.0, stop_loss=None, drawdown_stop=None,
+                         drawdown_tiers=DEFAULT_TIERS)
+    daily = run_account(_scenario(scores, n_days, prices=prices), rules).daily
+    exposure = daily["stock_value"] / daily["nav"]
+    assert exposure.iloc[10:].max() <= 1 / 3 + 0.01

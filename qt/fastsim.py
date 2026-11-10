@@ -19,7 +19,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-from qt.account import TRADING_DAYS, AccountRules, MarketData, _ranks
+from qt.account import TRADING_DAYS, AccountRules, MarketData, _ranks, buy_budget
 from qt.costs import trade_cost
 from qt.drawdown import DEFAULT_TIERS, DrawdownTiers
 
@@ -69,7 +69,8 @@ def simulate(data: MarketData, p: SimParams, cash: float = 100_000) -> pd.Series
 
     for i in range(1, n_days):
         s = i - 1
-        slot_limit = p.n_hold if tiers is None else DrawdownTiers.slots(p.n_hold, tiers.update(navs[s]))
+        fraction = 1.0 if tiers is None else tiers.update(navs[s])
+        slot_limit = DrawdownTiers.slots(p.n_hold, fraction)
         rebalance = s % p.rebalance_every == 0
         tradable = has_price[i]
         ranks = None
@@ -102,7 +103,7 @@ def simulate(data: MarketData, p: SimParams, cash: float = 100_000) -> pd.Series
             if ranks is None:
                 ranks = _ranks(data.score[s])
             nav = cash + sum(units[c] * marks[i, c] for c in units)
-            budget = min(cash / empty, nav * max_weight)
+            budget = buy_budget(cash, empty, nav, p.n_hold, max_weight, fraction)
             if budget >= p.min_trade:
                 counts: dict[object, int] = {}
                 if data.industry is not None:

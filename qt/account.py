@@ -159,6 +159,19 @@ class _Account:
         return value
 
 
+def buy_budget(cash: float, empty: int, nav: float, n_hold: int, max_weight: float, fraction: float = 1.0) -> float:
+    """每只要买的股票分到的钱：空位平分可用现金，不超过单股上限。
+
+    按回撤分档减仓时（fraction < 1）每只再不超过 nav / n_hold，这样持股只数和投入的钱一起降到约 fraction；
+    否则卖掉一只后，空出来的钱会集中到剩下的少数几个位置上，仓位又回到接近满仓（计划 3c 复查发现，
+    DECISIONS 2026-11-10「回撤分档按原意修正」）。真实账户和快速模拟器共用。
+    """
+    budget = min(cash / empty, nav * max_weight)
+    if fraction < 1:
+        budget = min(budget, nav / n_hold)
+    return budget
+
+
 def _ranks(score_row: np.ndarray) -> np.ndarray:
     """排名从 1 开始；没有分数的为无穷大（视为不在股票池）。"""
     ranks = np.full(score_row.shape, np.inf)
@@ -222,9 +235,10 @@ def run_account(data: MarketData, rules: AccountRules = AccountRules(), exposure
         elif seen_out:
             halted, peak = False, navs[s]
         slot_limit = 0 if halted else int(np.floor(rules.n_hold * exp[s] + 1e-9))
-        cut_reason = "exposure"
+        cut_reason, fraction = "exposure", 1.0
         if tiers is not None:
-            tier_slots = DrawdownTiers.slots(rules.n_hold, tiers.update(navs[s]))
+            fraction = tiers.update(navs[s])
+            tier_slots = DrawdownTiers.slots(rules.n_hold, fraction)
             if tier_slots < slot_limit:
                 slot_limit, cut_reason = tier_slots, "tier"
         rebalance = s % rules.rebalance_every == 0
@@ -253,7 +267,7 @@ def run_account(data: MarketData, rules: AccountRules = AccountRules(), exposure
         empty = slot_limit - len(acct.units) if rebalance else 0
         if empty > 0:
             nav = acct.cash + sum(acct.value_of(c, marks[i]) for c in acct.units)
-            budget = min(acct.cash / empty, nav * rules.max_stock_weight)
+            budget = buy_budget(acct.cash, empty, nav, rules.n_hold, rules.max_stock_weight, fraction)
             if budget < rules.min_trade:
                 empty = 0
             industry_value: dict[object, float] = {}
