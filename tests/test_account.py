@@ -433,3 +433,15 @@ def test_tiers_cap_money_not_just_names():
     daily = run_account(_scenario(scores, n_days, prices=prices), rules).daily
     exposure = daily["stock_value"] / daily["nav"]
     assert exposure.iloc[10:].max() <= 1 / 3 + 0.01
+
+
+def test_tiers_follow_strategy_back_in_after_cash():
+    # 跌 25% 进空仓档后，策略本身（假设一直满仓）回升到离高点不到 8%：账户应该重新买回，而不是在现金里等一年
+    days = 20
+    path = [10, 10, 7.5, 7.5, 8.0, 8.5, 9.0, 9.5, 9.6] + [9.8] * (days - 9)
+    scores = {c: [5 - i] * days for i, c in enumerate("ABC")}
+    rules = AccountRules(n_hold=3, sell_rank=6, max_stock_weight=0.34, stop_loss=None, drawdown_stop=None,
+                         drawdown_tiers=DEFAULT_TIERS)
+    daily = run_account(_scenario(scores, days, prices={c: path for c in "ABC"}), rules).daily
+    assert daily["slot_limit"].iloc[4] == 0                  # 信号日 3：回撤 25%，空仓
+    assert daily["n_holdings"].iloc[-1] == 3                 # 策略回升后重新满仓

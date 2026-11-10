@@ -112,3 +112,16 @@ def test_fastsim_tiers_cap_money_not_just_names():
     adj2.iloc[15:] = 8.3 * 0.9
     r2 = simulate(_market_data(score, adj2, adj2, true, true, None), p)
     assert r2.iloc[15] >= -0.1 / 3 - 0.002
+
+
+def test_fastsim_tiers_follow_strategy_back_in():
+    # 跌 17% 进 1/3 档（单股止损 −20% 不触发）；策略本身回升到离高点 2% 后应回到满仓。
+    # 按账户自己的净值算的话，只剩 1 只股票，净值回不到高点附近，会一直停在 1/3 档。
+    adj, score, true = _wide(20, 5, price=10.0)
+    path = [10, 10, 8.3, 8.3, 8.6, 9.0, 9.4, 9.6, 9.8] + [9.8] * 11
+    adj.loc[:, :] = np.array(path)[:, None]
+    adj.iloc[-1] = 10.5                                       # 最后一天上涨 7%：满仓时当天收益约 7%
+    score.loc[:, :] = [[5.0, 4.0, 3.0, 2.0, 1.0]] * 20
+    p = SimParams(n_hold=5, rebalance_every=1, sell_mult=2, industry_cap=1.0, tiers=True, min_trade=0)
+    r = simulate(_market_data(score, adj, adj, true, true, None), p)
+    assert r.iloc[-1] > 0.05

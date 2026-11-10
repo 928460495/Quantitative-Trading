@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 import pandas as pd
@@ -215,6 +215,9 @@ def run_account(data: MarketData, rules: AccountRules = AccountRules(), exposure
     if rules.drawdown_tiers is not None and rules.drawdown_stop is not None:
         raise ValueError("回撤分档和回撤兜底 C 只能用一个（计划 3c 起 drawdown_stop=None）")
     tiers = None if rules.drawdown_tiers is None else DrawdownTiers(rules.drawdown_tiers, rules.tier_window, rules.tier_buffer)
+    # 回撤按"同一策略一直满仓"的影子净值算（DECISIONS 2026-11-10「回撤分档改按影子净值」）：
+    # 按账户自己的净值算，空仓后净值不动，要等一年前的高点滑出窗口才能回来
+    shadow = None if tiers is None else run_account(data, replace(rules, drawdown_tiers=None), exposure).daily["nav"].to_numpy()
     navs = [acct.cash]
     peak, halted, seen_out = acct.cash, False, False
     rows = [(data.dates[0], acct.cash, acct.cash, 0.0, 0, rules.n_hold, 0.0, 0, 0)]
@@ -237,7 +240,7 @@ def run_account(data: MarketData, rules: AccountRules = AccountRules(), exposure
         slot_limit = 0 if halted else int(np.floor(rules.n_hold * exp[s] + 1e-9))
         cut_reason, fraction = "exposure", 1.0
         if tiers is not None:
-            fraction = tiers.update(navs[s])
+            fraction = tiers.update(shadow[s])
             tier_slots = DrawdownTiers.slots(rules.n_hold, fraction)
             if tier_slots < slot_limit:
                 slot_limit, cut_reason = tier_slots, "tier"

@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 import pandas as pd
@@ -53,6 +53,8 @@ def simulate(data: MarketData, p: SimParams, cash: float = 100_000) -> pd.Series
     sell_rank = p.sell_mult * p.n_hold
     cap_count = math.floor(p.industry_cap * p.n_hold + 1e-9)
     tiers = DrawdownTiers(DEFAULT_TIERS) if p.tiers else None
+    # 回撤按"同一策略一直满仓"的影子净值算，和 run_account 一样
+    shadow = None if tiers is None else cash * (1 + simulate(data, replace(p, tiers=False), cash)).cumprod().to_numpy()
     stop, cooldown, max_weight = _DEFAULT.stop_loss, _DEFAULT.cooldown_days, _DEFAULT.max_stock_weight
 
     units: dict[int, float] = {}
@@ -69,7 +71,7 @@ def simulate(data: MarketData, p: SimParams, cash: float = 100_000) -> pd.Series
 
     for i in range(1, n_days):
         s = i - 1
-        fraction = 1.0 if tiers is None else tiers.update(navs[s])
+        fraction = 1.0 if tiers is None else tiers.update(shadow[s])
         slot_limit = DrawdownTiers.slots(p.n_hold, fraction)
         rebalance = s % p.rebalance_every == 0
         tradable = has_price[i]
