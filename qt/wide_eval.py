@@ -19,15 +19,28 @@ from qt.preprocess import MAD_SCALE
 ic_summary = ic_stats   # 均值、标准差、ICIR、正值比例、Newey-West t（滞后 持有期 − 1）、天数
 
 
-def forward_returns(close: pd.DataFrame, horizons: list[int]) -> dict[int, pd.DataFrame]:
-    """持有期 → 远期收益宽表。close 是复权收盘价，停牌为缺失（对应的收益也缺失）。"""
-    entry = close.shift(-1)
+def forward_returns(close: pd.DataFrame, horizons: list[int], lag: int = 1) -> dict[int, pd.DataFrame]:
+    """持有期 → 远期收益宽表。close 是复权收盘价，停牌为缺失（对应的收益也缺失）。
+
+    lag：信号日 T 之后第几天收盘买入（默认 1 = T+1 收盘，和账户回测一致；0 = T 日收盘，只作诊断）。
+    """
+    if lag < 0:
+        raise ValueError("入场延迟不能为负（那是用了未来的价格）")
+    entry = close.shift(-lag)
     out = {}
     for h in horizons:
         if h < 1:
             raise ValueError("持有期至少 1 天")
-        out[h] = close.shift(-(h + 1)) / entry - 1
+        out[h] = close.shift(-(h + lag)) / entry - 1
     return out
+
+
+def ic_decay(score: pd.DataFrame, close: pd.DataFrame, can_buy: pd.DataFrame,
+             horizons: tuple[int, ...] = (1, 5, 10, 20, 40), lag: int = 1) -> pd.Series:
+    """IC 随持有天数衰减的曲线：每个持有期的 RankIC 均值（只在第二天能买进的股票里）。"""
+    fwd = forward_returns(close, list(horizons), lag=lag)
+    mask = can_buy.astype(bool)
+    return pd.Series({h: float(rank_ic(score, fwd[h], mask).mean()) for h in horizons}, name="rank_ic")
 
 
 def drop_tail(wide: pd.DataFrame, n: int) -> pd.DataFrame:

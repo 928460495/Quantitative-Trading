@@ -296,3 +296,35 @@ def test_full_size_account_backtest_is_fast():
     t = time.time()
     we.account_excess(score, adj, adj, true, true, industry)
     assert time.time() - t < 60
+
+
+# ---------- 计划 3c 任务 2：入场延迟和 IC 衰减 ----------
+
+def test_forward_returns_lag_default_unchanged_and_no_lookahead():
+    close = pd.DataFrame({"a": [1.0, 2, 4, 8, 16, 32]}, index=pd.bdate_range("2020-01-01", periods=6))
+    base = we.forward_returns(close, [2])[2]
+    assert base.equals(we.forward_returns(close, [2], lag=1)[2])
+    lag0 = we.forward_returns(close, [2], lag=0)[2]
+    assert lag0.iloc[0, 0] == 3.0                                  # 1 → 4
+    bumped = close.copy()
+    bumped.iloc[4:] *= 10
+    assert we.forward_returns(bumped, [2], lag=0)[2].iloc[1, 0] == lag0.iloc[1, 0]   # 第 1 天只用到第 3 天
+
+
+def test_forward_returns_negative_lag_raises():
+    close = pd.DataFrame({"a": [1.0, 2, 3]}, index=pd.bdate_range("2020-01-01", periods=3))
+    with pytest.raises(ValueError):
+        we.forward_returns(close, [1], lag=-1)
+
+
+def test_ic_decay_perfect_signal():
+    rng = np.random.default_rng(5)
+    idx = pd.bdate_range("2020-01-01", periods=60)
+    cols = [f"s{i}" for i in range(40)]
+    close = pd.DataFrame(np.exp(np.cumsum(rng.normal(0, 0.02, (60, 40)), axis=0)), index=idx, columns=cols)
+    can_buy = pd.DataFrame(True, index=idx, columns=cols)
+    score = we.forward_returns(close, [5])[5]
+    ic = we.ic_decay(score, close, can_buy, horizons=(1, 5, 10))
+    assert list(ic.index) == [1, 5, 10]
+    assert ic[5] == pytest.approx(1.0)
+    assert ic[1] < 0.99
