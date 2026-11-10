@@ -15,12 +15,13 @@ from collections.abc import Mapping
 
 import pandas as pd
 
-from qt.wide_eval import zscore
+from qt.wide_eval import neutralize, zscore
 
 
-def _mean_skipna(frames: list[pd.DataFrame]) -> pd.DataFrame:
-    total = sum(f.fillna(0.0) for f in frames)
-    count = sum(f.notna().astype(float) for f in frames)
+def _mean_skipna(frames: list[pd.DataFrame], weights: list[float] | None = None) -> pd.DataFrame:
+    weights = weights or [1.0] * len(frames)
+    total = sum(w * f.fillna(0.0) for f, w in zip(frames, weights))
+    count = sum(w * f.notna().astype(float) for f, w in zip(frames, weights))
     return (total / count).where(count > 0)
 
 
@@ -32,6 +33,27 @@ def category_scores(scores: Mapping[str, pd.DataFrame], categories: Mapping[str,
     return {cat: zscore(_mean_skipna(frames)) for cat, frames in groups.items()}
 
 
-def composite(cat_scores: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
-    """类间等权平均后每天标准化。"""
-    return zscore(_mean_skipna(list(cat_scores.values())))
+def composite(cat_scores: Mapping[str, pd.DataFrame], weights: Mapping[str, float] | None = None) -> pd.DataFrame:
+    """类间加权平均（weights 里没写的大类权重为 1；不传就是等权）后每天标准化。"""
+    w = weights or {}
+    return zscore(_mean_skipna(list(cat_scores.values()), [w.get(c, 1.0) for c in cat_scores]))
+
+
+LOWVOL = "低波动"
+
+
+def neutral_composite(factor_scores: Mapping[str, pd.DataFrame], categories: Mapping[str, str], industry: pd.DataFrame,
+                      log_mcap: pd.DataFrame, lowvol_weight: float = 1.0, smooth: int = 1) -> pd.DataFrame:
+    """计划 3c 的合成分（docs/DECISIONS.md 2026-11-10「计划 3c 事先登记的规则」）：
+
+    类内等权 → 每类标准化 → 类间加权（低波动类权重 lowvol_weight，其余 1）→ 每天对申万一级行业和对数流通市值
+    中性化（不押大小盘）→ 过去 smooth 天平均（只用当天及以前，不足 smooth 天用已有天数）→ 每天标准化。
+    """
+    if smooth < 1:
+        raise ValueError("平滑天数至少 1")
+    cats = category_scores(factor_scores, categories)
+    total = composite(cats, {LOWVOL: lowvol_weight})
+    neutral = neutralize(total, industry, log_mcap, size=True)
+    if smooth > 1:
+        neutral = neutral.rolling(smooth, min_periods=1).mean().where(neutral.notna())   # 今天没分数 = 不在股票池
+    return zscore(neutral)
