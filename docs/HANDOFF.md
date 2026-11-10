@@ -74,7 +74,7 @@ git push
 - 核对基准：`python scripts/check_benchmark.py`；核对指数：`python scripts/check_indexes.py`
 - 数据：补采 `python scripts/collect_full_a.py --part daily`，检查 `--part check --fix`，打包 `--part pack`，本机解包 `python scripts/download_full_a.py --archive data/full_a_日期.tar`
 - 多进程会被系统结束，用 `--jobs 1`；终端命令里别夹 `#` 注释；推送用 GitHub 个人访问令牌（勾 `repo` 权限）
-- "能买股票等权"基准在训练段年化 −9.9%，原因是流动性过滤和 T+1 涨停买不进，不是算错（`DATA_NOTES.md`）
+- "能买股票等权"基准在训练段年化 −9.9%：每天重挑会把已持有、连续涨停的股票剔除，低估了约 9 个点/年；2026-11-10 起诊断另列"能持有等权"（`DATA_NOTES.md`、DECISIONS「基准更正」）
 
 ## 六、更新（2026-11-10，本机会话）
 
@@ -89,3 +89,6 @@ git push
   1. `python scripts/build_pool.py`（约 1–2 小时；退出码 2 = 高价股买不起比例超标，停下讨论）
   2. `python scripts/run_plan3c_train.py`（约 4–7 小时，可断点续跑；退出码 1 = 某个检查没过，看 `reports/plan3c/train/README.md`）
   3. 只有第 2 步写出 `reports/plan3c/train/final.json` 才跑：`python scripts/run_plan3c_valid.py`（只能跑一次）
+- 进度（2026-11-10）：第 1 步通过（买不起比例最高 3.6%）；第 2 步所有检查通过，方案固定为 turn_12m + ep_deduct、15 只、每 10 天调仓、跌出前 45 名才卖、行业上限 20%（`reports/plan3c/train/README.md`）。训练段真实账户年化 19.1%、最大回撤 −24.7%；不做回撤控制时 10.1%、−65%，收益约一半来自回撤分档
+- 跑验证段前做了基准更正（只改报告里的说明数字）：诊断加"能持有等权"、每年平均持仓比例、空仓天数（DECISIONS 2026-11-10「基准更正」）
+- 下一步：第 3 步 `python scripts/run_plan3c_valid.py`（只能跑一次），之后任务 11 审核节点

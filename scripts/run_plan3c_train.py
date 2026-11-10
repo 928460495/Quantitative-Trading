@@ -127,7 +127,7 @@ def run(train: dict, pool: pd.DataFrame, out_dir: Path, cache_dir: Path, log_pat
     # ⑦ 真实账户确认 + 壳价值对比
     data = wf.market(train, score, full)
     result = run_account(data, wf.account_rules(p))
-    for name, table in diagnose(result, train, score).items():
+    for name, table in diagnose(result, train, score, p.rebalance_every).items():
         sections[f"⑦ 真实账户：{name}"] = table
     small = train["log_mcap"].loc[full[0]:full[1]].rank(axis=1, pct=True) < SHELL_CUT
     shell = run_account(wf.market(train, score.mask(small), full), wf.account_rules(p))

@@ -42,7 +42,7 @@ def test_runs_once_and_reports_five_criteria(tmp_path):
     code = rv.run(seg, POOL, FINAL, base, tmp_path / "out", trials)
     assert code == 0
     text = (tmp_path / "out" / "README.md").read_text()
-    for mark in ("①", "②", "③", "④", "⑤", "DSR", "验证段在计划 4 已看过两次"):
+    for mark in ("①", "②", "③", "④", "⑤", "DSR", "验证段在计划 4 已看过两次", "能持有等权", "平均持仓比例", "空仓天数"):
         assert mark in text, mark
     assert (tmp_path / "out" / "backtest.csv").exists()
     kinds = [json.loads(line)["kind"] for line in trials.read_text().splitlines()]

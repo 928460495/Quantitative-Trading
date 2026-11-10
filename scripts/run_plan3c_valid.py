@@ -83,7 +83,7 @@ def run(valid: dict, pool: pd.DataFrame, final: dict, baseline_score: pd.DataFra
     dsr = deflated_sharpe(nav.pct_change().dropna(), n_trials, _sharpe_var(trials))
     sections = {"五条成功标准（验证段预演）": crit, "各方案": table,
                 "DSR": pd.Series({**dsr, "试验次数": n_trials}).to_frame("值"),
-                **{f"诊断：{n}": t for n, t in diagnose(main, valid, score).items()}}
+                **{f"诊断：{n}": t for n, t in diagnose(main, valid, score, p.rebalance_every).items()}}
     notes = ["规则见 docs/DECISIONS.md 2026-11-10「计划 3c 事先登记的规则」",
              "**验证段在计划 4 已看过两次**，这里的结论会偏乐观；之后只有最终测试是干净的检验",
              f"方案：{', '.join(factors)}；{wf.label(p, k, w)}",
