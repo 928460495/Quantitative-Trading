@@ -10,6 +10,7 @@ pool 是 index = 因子名、带 category 列的表（scripts/build_pool.read_po
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Callable, Sequence
 from itertools import product
@@ -49,6 +50,18 @@ def from_dict(d: dict) -> Setup:
     p = SimParams(n_hold=d["n_hold"], rebalance_every=d["rebalance_every"], sell_mult=d["sell_mult"],
                   industry_cap=d["industry_cap"])
     return p, int(d["smooth"]), float(d["lowvol_weight"])
+
+
+_SOURCES = ("account.py", "composite.py", "drawdown.py", "fastsim.py", "walkforward.py", "wide_eval.py")
+
+
+def fingerprint(grid: Sequence[Setup], reference: SimParams, pool: pd.DataFrame, min_gain: float = MIN_GAIN) -> str:
+    """中间结果的钥匙：网格、参考组合、候选因子、增量门槛和相关代码的内容。任何一样变了，旧的选择就不再复用。"""
+    here = Path(__file__).resolve().parent
+    blob = json.dumps({"grid": [label(*g) for g in grid], "reference": repr(reference), "pool": list(pool.index),
+                       "categories": list(pool["category"]), "min_gain": min_gain,
+                       "code": [hashlib.sha1((here / f).read_bytes()).hexdigest() for f in _SOURCES]})
+    return hashlib.sha1(blob.encode()).hexdigest()[:12]
 
 
 def account_rules(p: SimParams) -> AccountRules:

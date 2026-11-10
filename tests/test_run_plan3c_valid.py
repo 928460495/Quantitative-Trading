@@ -65,3 +65,14 @@ def test_refuses_second_run(tmp_path):
 def test_missing_final_raises(tmp_path):
     with pytest.raises(FileNotFoundError):
         rv.load_final(tmp_path / "final.json")
+
+
+def test_refuses_after_partial_run(tmp_path):
+    # 上次跑到一半崩了（只写了 backtest.csv、没写 README）：也不能再跑
+    seg, base = _valid()
+    trials = _trials(tmp_path)
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "backtest.csv").write_text("x")
+    assert rv.run(seg, POOL, FINAL, base, out, trials) != 0
+    assert sorted(p.name for p in out.iterdir()) == ["backtest.csv"]

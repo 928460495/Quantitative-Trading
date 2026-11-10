@@ -54,10 +54,13 @@ def _nav(returns: pd.Series) -> pd.Series:
 def run(train: dict, pool: pd.DataFrame, out_dir: Path, cache_dir: Path, log_path: Path | None,
         grid=wf.GRID, years=range(2013, 2019), reference=wf.REFERENCE, train_end: str = TRAIN_END) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "final.json").unlink(missing_ok=True)      # 旧的方案不能留到这次没通过的运行之后
+    cache_dir = cache_dir / wf.fingerprint(grid, reference, pool)   # 规则或代码变了就不用旧的中间结果
     log = (lambda kind, params, metrics: log_trial(kind, params, metrics, path=log_path)) if log_path else None
     full = (wf.TRAIN_START, train_end)
     sections: dict[str, pd.DataFrame] = {}
-    notes: list[str] = ["规则见 docs/DECISIONS.md 2026-11-10「计划 3c 事先登记的规则」", "验证段在计划 4 已看过两次；本报告只用训练段"]
+    notes: list[str] = ["规则见 docs/DECISIONS.md 2026-11-10「计划 3c 事先登记的规则」", "验证段在计划 4 已看过两次；本报告只用训练段",
+                        "前推结果略偏乐观：59 个候选因子和它们的方向是用整个训练段（2010–2018）选出来的，前推时没有每年重新筛选"]
 
     def stop(reason: str) -> int:
         write_report(sections, out_dir / "README.md", "计划 3c 训练段结果：停下讨论", notes + [f"**停下讨论**：{reason}"])

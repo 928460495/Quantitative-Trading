@@ -49,9 +49,11 @@ def _sharpe_var(trials: Path) -> float:
 
 
 def run(valid: dict, pool: pd.DataFrame, final: dict, baseline_score: pd.DataFrame, out_dir: Path, trials: Path) -> int:
-    if (out_dir / "README.md").exists():
-        print(f"{out_dir / 'README.md'} 已存在：验证段只能跑一次，拒绝运行")
+    if out_dir.exists() and any(out_dir.iterdir()):
+        print(f"{out_dir} 里已经有东西（跑过，或上次跑到一半）：验证段只能跑一次，拒绝运行")
         return 1
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "STARTED").write_text("验证段已开始运行；之后不能再跑\n")   # 先占位：中途崩了也不能重跑
     p = SimParams(**final["params"])
     k, w, factors = int(final["smooth"]), float(final["lowvol_weight"]), final["factors"]
     rules = wf.account_rules(p)
@@ -73,7 +75,6 @@ def run(valid: dict, pool: pd.DataFrame, final: dict, baseline_score: pd.DataFra
                           for name, s in navs.items()}).T
     crit = criteria(nav, bench, cost2x.daily["nav"], annualize(baseline.daily["nav"]))
 
-    out_dir.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(navs).to_csv(out_dir / "backtest.csv")
     for name, s in navs.items():
         log_trial("plan3c_valid", {"variant": name, "segment": "valid", **final},

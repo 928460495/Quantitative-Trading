@@ -46,3 +46,30 @@ def test_happy_path_writes_final_and_logs(tmp_path, monkeypatch):
     assert kinds == {"plan3c_step", "plan3c_grid"}
     wf = pd.read_csv(tmp_path / "out" / "walk_forward.csv", index_col=0, parse_dates=True)
     assert wf.index.min().year == 2012
+
+
+def test_report_states_optimism_bias(tmp_path, monkeypatch):
+    monkeypatch.setattr(rt, "MAX_PBO", 1.0)
+    rt.run(fake_seg(), POOL, tmp_path / "out", tmp_path / "cache", None, **KW)
+    assert "偏乐观" in (tmp_path / "out" / "README.md").read_text()
+
+
+def test_stale_final_removed_when_rerun_stops(tmp_path, monkeypatch):
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "final.json").write_text("{}")
+    monkeypatch.setattr(rt, "MAX_GAP", -1.0)
+    assert rt.run(fake_seg(), POOL, out, tmp_path / "cache", None, **KW) != 0
+    assert not (out / "final.json").exists()
+
+
+def test_cache_is_keyed_by_rules(tmp_path, monkeypatch):
+    from qt import walkforward as wf
+    a = wf.fingerprint(SMALL_GRID, REF, POOL)
+    assert a == wf.fingerprint(SMALL_GRID, REF, POOL)
+    assert a != wf.fingerprint(SMALL_GRID[:2], REF, POOL)
+    assert a != wf.fingerprint(SMALL_GRID, REF, POOL.iloc[:2])
+    assert a != wf.fingerprint(SMALL_GRID, REF, POOL, min_gain=0.1)
+    monkeypatch.setattr(rt, "MAX_PBO", 1.0)
+    rt.run(fake_seg(), POOL, tmp_path / "out", tmp_path / "cache", None, **KW)
+    assert (tmp_path / "cache" / a / "wf_2012.json").exists()
