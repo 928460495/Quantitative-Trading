@@ -58,8 +58,11 @@ def _save(df: pd.DataFrame, path: Path) -> None:
 
 
 def build_segment(ctx: ScreenContext, selected: pd.DataFrame, compute: Callable[[str], pd.DataFrame], out_dir: Path,
-                  index: dict[str, pd.Series], meta: dict | None = None) -> pd.DataFrame:
-    """compute(因子名) -> 原始因子宽表（含预热期）。返回总分（只含 ctx.dates）。"""
+                  index: dict[str, pd.Series], meta: dict | None = None, save_log_mcap: bool = False) -> pd.DataFrame:
+    """compute(因子名) -> 原始因子宽表（含预热期）。返回总分（只含 ctx.dates）。
+
+    save_log_mcap：另存对数流通市值（计划 3c 合成分对市值中性化要用）。
+    """
     scores = {}
     t0 = time.time()
     for k, (name, row) in enumerate(selected.iterrows(), 1):
@@ -78,6 +81,8 @@ def build_segment(ctx: ScreenContext, selected: pd.DataFrame, compute: Callable[
         elif name == "industry":
             frame = frame.astype("string")
         _save(frame, out_dir / f"{name}.parquet")
+    if save_log_mcap:
+        _save(ctx.trim(ctx.log_mcap).astype("float32"), out_dir / "log_mcap.parquet")
     idx = pd.DataFrame({k: s.reindex(ctx.close.index) for k, s in index.items()})
     idx.to_parquet(out_dir / "index.parquet")
     info = {"factors": list(selected.index), "categories": sorted(cats), "start": str(ctx.dates[0].date()),
@@ -97,6 +102,8 @@ def load_segment(seg_dir: Path) -> dict:
     for name in MARKET:
         out[name] = read(seg_dir / f"{name}.parquet")
     out["industry"] = out["industry"].astype(object).where(out["industry"].notna(), None)
+    if (seg_dir / "log_mcap.parquet").exists():
+        out["log_mcap"] = read(seg_dir / "log_mcap.parquet")
     return out
 
 
