@@ -356,3 +356,67 @@ def test_index_volatility_is_annualized_std_of_daily_returns():
     close = pd.Series(np.exp(np.cumsum(np.random.default_rng(3).normal(0, 0.01, 30))) * 100, index=idx)
     want = close.pct_change().rolling(20).std() * np.sqrt(252)
     pd.testing.assert_series_equal(index_volatility(close, 20), want, check_names=False)
+
+
+# ---------- 计划 3c 任务 3：调仓间隔、最小交易额、按回撤分档减仓 ----------
+
+from qt.drawdown import DEFAULT_TIERS  # noqa: E402
+
+ONE = dict(n_hold=1, sell_rank=1, max_stock_weight=1.0, stop_loss=None, drawdown_stop=None)
+
+
+def test_rules_new_fields_default_to_old_behavior():
+    r = AccountRules()
+    assert (r.rebalance_every, r.min_trade, r.drawdown_tiers, r.tier_window, r.tier_buffer) == (1, 0.0, None, 250, 0.02)
+
+
+def test_rebalance_every_blocks_rank_sells_and_buys_between_rebalance_days():
+    scores = {"A": [5, 1, 1, 1, 1, 1], "B": [1, 5, 5, 5, 5, 5]}
+    res = run_account(_scenario(scores, 6), AccountRules(rebalance_every=3, **ONE))
+    t = res.trades
+    dates = pd.bdate_range("2019-01-02", periods=6)
+    assert list(zip(t["instrument"], t["side"])) == [("A", "buy"), ("A", "sell"), ("B", "buy")]
+    assert t["date"].iloc[1] == dates[4] and t["date"].iloc[2] == dates[4]   # 信号日 3 才调仓
+
+
+def test_stop_loss_still_fires_on_non_rebalance_day():
+    rules = AccountRules(n_hold=1, sell_rank=3, max_stock_weight=1.0, stop_loss=0.20, drawdown_stop=None,
+                         rebalance_every=10)
+    res = run_account(_scenario({"A": [5] * 5, "B": [1] * 5}, 5, prices={"A": [10, 10, 7.5, 7.5, 7.5], "B": [10] * 5}),
+                      rules)
+    sells = res.trades[res.trades["side"] == "sell"]
+    assert list(sells["reason"]) == ["stop"]
+    assert sells["date"].iloc[0] == pd.bdate_range("2019-01-02", periods=5)[3]
+
+
+def test_min_trade_skips_small_budget():
+    rules = AccountRules(cash=1500, min_trade=2000, **ONE)
+    res = run_account(_scenario({"A": [5, 5, 5]}, 3, price=1.0), rules)
+    assert res.trades.empty
+    rules_ok = AccountRules(cash=1500, min_trade=1000, **ONE)
+    assert not run_account(_scenario({"A": [5, 5, 5]}, 3, price=1.0), rules_ok).trades.empty
+
+
+def test_tiers_cut_holdings_next_day_and_sell_lowest_rank():
+    rules = AccountRules(n_hold=3, sell_rank=10, max_stock_weight=0.34, stop_loss=None, drawdown_stop=None,
+                         drawdown_tiers=DEFAULT_TIERS)
+    drop = [10, 10, 8.8, 8.8, 8.8]
+    scores = {"A": [5] * 5, "B": [4] * 5, "C": [3] * 5, "D": [1] * 5}
+    res = run_account(_scenario(scores, 5, prices={c: drop for c in "ABCD"}), rules)
+    sells = res.trades[res.trades["side"] == "sell"]
+    assert list(sells["instrument"]) == ["C"] and list(sells["reason"]) == ["tier"]
+    assert sells["date"].iloc[0] == pd.bdate_range("2019-01-02", periods=5)[3]     # 信号日 2 判断，第 3 天卖
+    assert res.daily["slot_limit"].iloc[3] == 2
+
+
+def test_tiers_with_drawdown_stop_raises():
+    with pytest.raises(ValueError):
+        run_account(_scenario({"A": [5, 5]}, 2), AccountRules(drawdown_stop=0.2, drawdown_tiers=DEFAULT_TIERS))
+
+
+def test_rebalance_day_limit_down_keeps_position_until_next_rebalance():
+    scores = {"A": [5, 1, 1, 1, 1, 1], "B": [1, 5, 5, 5, 5, 5]}
+    can_sell = {"A": [True, True, False, True, True, True], "B": [True] * 6}
+    res = run_account(_scenario(scores, 6, can_sell=can_sell), AccountRules(rebalance_every=2, **ONE))
+    sells = res.trades[res.trades["side"] == "sell"]
+    assert sells["date"].iloc[0] == pd.bdate_range("2019-01-02", periods=6)[5]    # 信号日 2 卖不出，等到信号日 4

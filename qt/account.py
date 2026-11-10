@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 
 from qt.costs import trade_cost
+from qt.drawdown import DrawdownTiers
 
 LOT = 100
 TRADING_DAYS = 252
@@ -33,6 +34,12 @@ class AccountRules:
     cooldown_days: int = 20
     drawdown_stop: float | None = 0.20
     cost_multiplier: float = 1.0
+    # 计划 3c（DECISIONS 2026-11-10）：默认值保持旧行为
+    rebalance_every: int = 1                     # 每隔几个信号日才做排名卖出和买入
+    min_trade: float = 0.0                       # 买入预算低于它就不买
+    drawdown_tiers: tuple | None = None          # 按回撤分档减仓（qt.drawdown.DEFAULT_TIERS）；和 drawdown_stop 二选一
+    tier_window: int = 250
+    tier_buffer: float = 0.02
 
 
 @dataclass
@@ -192,6 +199,9 @@ def run_account(data: MarketData, rules: AccountRules = AccountRules(), exposure
     if exposure is not None and not exposure.index.isin(data.dates).any():
         raise ValueError("exposure 的日期和行情对不上（全部缺失会被当成满仓，仓位控制就悄悄失效了）")
     exp = np.ones(len(data.dates)) if exposure is None else exposure.reindex(data.dates).fillna(1.0).to_numpy(float)
+    if rules.drawdown_tiers is not None and rules.drawdown_stop is not None:
+        raise ValueError("回撤分档和回撤兜底 C 只能用一个（计划 3c 起 drawdown_stop=None）")
+    tiers = None if rules.drawdown_tiers is None else DrawdownTiers(rules.drawdown_tiers, rules.tier_window, rules.tier_buffer)
     navs = [acct.cash]
     peak, halted, seen_out = acct.cash, False, False
     rows = [(data.dates[0], acct.cash, acct.cash, 0.0, 0, rules.n_hold, 0.0, 0, 0)]
@@ -212,6 +222,12 @@ def run_account(data: MarketData, rules: AccountRules = AccountRules(), exposure
         elif seen_out:
             halted, peak = False, navs[s]
         slot_limit = 0 if halted else int(np.floor(rules.n_hold * exp[s] + 1e-9))
+        cut_reason = "exposure"
+        if tiers is not None:
+            tier_slots = DrawdownTiers.slots(rules.n_hold, tiers.update(navs[s]))
+            if tier_slots < slot_limit:
+                slot_limit, cut_reason = tier_slots, "tier"
+        rebalance = s % rules.rebalance_every == 0
 
         # 1. 卖：退市 → 回撤兜底 → 止损 → 排名 → 仓位上限（多出来的按排名从低到高卖）
         for col in list(acct.units):
@@ -225,19 +241,21 @@ def run_account(data: MarketData, rules: AccountRules = AccountRules(), exposure
             elif rules.stop_loss is not None and marks[s, col] <= acct.cost_price[col] * (1 - rules.stop_loss):
                 acct.sell(i, col, "stop")
                 acct.cooldown_until[col] = i + rules.cooldown_days
-            elif ranks[col] > rules.sell_rank:
+            elif rebalance and ranks[col] > rules.sell_rank:
                 acct.sell(i, col, "rank")
         for col in sorted(acct.units, key=lambda c: -ranks[c]):
             if len(acct.units) <= slot_limit:
                 break
             if data.can_sell[s, col] and tradable_today[col]:
-                acct.sell(i, col, "exposure")
+                acct.sell(i, col, cut_reason)
 
         # 2. 买
-        empty = slot_limit - len(acct.units)
+        empty = slot_limit - len(acct.units) if rebalance else 0
         if empty > 0:
             nav = acct.cash + sum(acct.value_of(c, marks[i]) for c in acct.units)
             budget = min(acct.cash / empty, nav * rules.max_stock_weight)
+            if budget < rules.min_trade:
+                empty = 0
             industry_value: dict[object, float] = {}
             if data.industry is not None:
                 for c in acct.units:
