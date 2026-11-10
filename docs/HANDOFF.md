@@ -85,3 +85,7 @@ git push
 - 调研（2026-11-10）：计划 4 为什么差、3c 候选方向，见 `docs/research/2026-11-10-why-plan4-failed.md`。结论：因子在验证段仍有效（RankIC 0.085 → 0.074），每年都跑赢能买的股票；跑输沪深300 主要因为能买的股票 2019–2020 比沪深300 少 24–26 个点（大盘蓝筹行情），其次是每年 6–7% 的成本
 
 - 计划 3c 设计：`docs/superpowers/specs/2026-11-10-plan3c-design.md`；实施计划：`docs/superpowers/plans/2026-11-10-robust-low-turnover.md`（进行中，按任务顺序执行；规则见 DECISIONS 2026-11-10「计划 3c 事先登记的规则」）
+- 计划 3c 代码已全部完成并通过复查（2026-11-10）。接下来按顺序在本机运行（单进程），每步结果提交推送后再跑下一步：
+  1. `python scripts/build_pool.py`（约 1–2 小时；退出码 2 = 高价股买不起比例超标，停下讨论）
+  2. `python scripts/run_plan3c_train.py`（约 4–7 小时，可断点续跑；退出码 1 = 某个检查没过，看 `reports/plan3c/train/README.md`）
+  3. 只有第 2 步写出 `reports/plan3c/train/final.json` 才跑：`python scripts/run_plan3c_valid.py`（只能跑一次）
