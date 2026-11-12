@@ -1,6 +1,6 @@
 """按交易所规则算涨跌停（docs/STRATEGY.md 第 9 节）。
 
-- 主板 10%，ST 5%
+- 主板 10%；主板 ST、*ST 在 2026-07-06 前 5%，之后 10%（沪深交易所《交易规则（2026 年修订）》）
 - 创业板（300、301 开头）2020-08-24 起 20%（含 ST），之前同主板
 - 科创板（688、689 开头）20%
 - 新股上市初期的特殊规则不用管：股票池已剔除上市不满一年的股票
@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 
 CHINEXT_REFORM = pd.Timestamp("2020-08-24")
+ST_LIMIT_REFORM = pd.Timestamp("2026-07-06")
 TICK_TOLERANCE = 0.001
 
 
@@ -23,7 +24,7 @@ def limit_pct(instrument: pd.Index, date: pd.DatetimeIndex, is_st: pd.Series) ->
     code = pd.Index(instrument).str
     chinext = (code.startswith("SZ300") | code.startswith("SZ301")) & (pd.DatetimeIndex(date) >= CHINEXT_REFORM)
     star = code.startswith("SH688") | code.startswith("SH689")
-    st = is_st.to_numpy().astype(bool)
+    st = is_st.to_numpy().astype(bool) & ~(pd.DatetimeIndex(date) >= ST_LIMIT_REFORM)   # 日期缺失时沿用 5%
     pct = np.where(chinext | star, 0.20, np.where(st, 0.05, 0.10))
     return pd.Series(pct, index=is_st.index)
 
