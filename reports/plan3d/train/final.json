@@ -1,0 +1,45 @@
+{
+  "spec": {
+    "groups": [
+      "便宜",
+      "跌得多",
+      "冷门",
+      "业绩超预期"
+    ],
+    "n_hold": 15,
+    "rebalance_every": 20,
+    "sell_mult": 3,
+    "stop_loss": null,
+    "vol_cut": 0.2,
+    "price_floor": 2.0,
+    "drop_loss_small": true,
+    "cost_multiplier": 1.0,
+    "offset": 0
+  },
+  "groups": {
+    "便宜": [
+      "ep_deduct",
+      "bp",
+      "sp_ttm"
+    ],
+    "跌得多": [
+      "ret60",
+      "ret120",
+      "high52w",
+      "lit_high52w",
+      "a158_MA60",
+      "a158_QTLU60",
+      "a158_ROC60",
+      "a158_MAX60"
+    ],
+    "冷门": [
+      "turn_12m",
+      "gtja100",
+      "gtja081",
+      "gtja132"
+    ],
+    "业绩超预期": [
+      "sue"
+    ]
+  }
+}
