@@ -23,6 +23,20 @@ def test_main_board_instruments(tmp_path):
     assert main_board_instruments("2016-01-01", "2016-12-31", tmp_path) == ["SH600000", "SZ001979"]
 
 
+def test_load_fundamentals_refuses_test_segment(tmp_path, monkeypatch):
+    from qt import panel as pn
+    from qt.config import TestSegmentLockedError
+
+    monkeypatch.delenv("QT_UNLOCK_TEST", raising=False)
+    called = []
+    monkeypatch.setattr(pn, "_fundamental_wide", lambda dates, inst, d: called.append((dates, inst, d)) or {"x": 1})
+    ok = pd.bdate_range("2021-12-01", "2021-12-31")
+    assert pn.load_fundamentals(ok, ["SH600000"], tmp_path) == {"x": 1}
+    assert called[0][1] == ["SH600000"] and called[0][2] == tmp_path and called[0][0].equals(ok)
+    with pytest.raises(TestSegmentLockedError):
+        pn.load_fundamentals(pd.bdate_range("2021-12-01", "2022-01-04"), ["SH600000"], tmp_path)
+    assert len(called) == 1                                # 碰到测试段：读数据之前就报错
+
 # ---------- 需要数据包和全 A 补充数据 ----------
 
 

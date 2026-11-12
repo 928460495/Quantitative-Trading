@@ -88,6 +88,12 @@ def _fundamental_wide(dates: pd.DatetimeIndex, instruments: list[str], directory
     return out
 
 
+def load_fundamentals(dates: pd.DatetimeIndex, instruments: list[str], full_a_dir: Path = FULL_A_DIR) -> dict[str, pd.DataFrame]:
+    """只读季度财务宽表（不读行情，比 load_panel 快得多）。dates 要在允许的区间内。"""
+    check_range(str(dates[0].date()), str(dates[-1].date()))
+    return _fundamental_wide(dates, instruments, full_a_dir)
+
+
 def load_panel(start: str, end: str, instruments: list[str] | None = None,
                full_a_dir: Path = FULL_A_DIR) -> dict[str, pd.DataFrame]:
     check_range(start, end)
