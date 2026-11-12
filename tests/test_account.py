@@ -445,3 +445,58 @@ def test_tiers_follow_strategy_back_in_after_cash():
     daily = run_account(_scenario(scores, days, prices={c: path for c in "ABC"}), rules).daily
     assert daily["slot_limit"].iloc[4] == 0                  # 信号日 3：回撤 25%，空仓
     assert daily["n_holdings"].iloc[-1] == 3                 # 策略回升后重新满仓
+
+
+# ---------- 事件型退出（框架 2.0：排除名单命中的持仓第二个交易日卖出，不等调仓日） ----------
+
+def _event_data(force):
+    import dataclasses
+    from qt.wide_eval import _market_data
+    idx = pd.bdate_range("2020-01-01", periods=30)
+    cols = ["SH600000", "SH600001", "SH600002"]
+    close = pd.DataFrame(10.0, index=idx, columns=cols)
+    score = pd.DataFrame([[3.0, 2.0, 1.0]] * len(idx), index=idx, columns=cols)
+    true = pd.DataFrame(True, index=idx, columns=cols)
+    data = _market_data(score, close, close, true, true, None)
+    return idx, cols, dataclasses.replace(data, force_exit=force(idx, cols))
+
+
+def test_force_exit_sells_on_next_trading_day_even_between_rebalances():
+    def force(idx, cols):
+        f = np.zeros((len(idx), len(cols)), dtype=bool)
+        f[7:, 0] = True                                   # 第 7 个信号日起，第一只被点名
+        return f
+    idx, cols, data = _event_data(force)
+    rules = AccountRules(n_hold=2, sell_rank=3, stop_loss=None, drawdown_stop=None, rebalance_every=20,
+                         max_stock_weight=1.0, max_industry_weight=1.0)
+    tr = run_account(data, rules).trades
+    sells = tr[tr["side"] == "sell"]
+    assert len(sells) == 1 and sells["instrument"].iloc[0] == cols[0]
+    assert sells["date"].iloc[0] == idx[8] and sells["reason"].iloc[0] == "event"   # 信号日 7 → 第 8 天成交
+    buys = tr[tr["side"] == "buy"]
+    assert buys[buys["instrument"] == cols[0]]["date"].tolist() == [idx[1]]       # 被点名的不再买回
+    assert buys[buys["instrument"] == cols[2]]["date"].tolist() == [idx[21]]      # 空位到下个调仓日才补，补的是别的股票
+
+
+def test_force_exit_waits_until_the_stock_can_be_sold():
+    import dataclasses
+    def force(idx, cols):
+        f = np.zeros((len(idx), len(cols)), dtype=bool)
+        f[7:, 0] = True
+        return f
+    idx, cols, data = _event_data(force)
+    can_sell = data.can_sell.copy()
+    can_sell[7:12, 0] = False                             # 连续跌停 5 天卖不掉
+    data = dataclasses.replace(data, can_sell=can_sell)
+    rules = AccountRules(n_hold=2, sell_rank=3, stop_loss=None, drawdown_stop=None, rebalance_every=20,
+                         max_stock_weight=1.0, max_industry_weight=1.0)
+    sells = run_account(data, rules).trades.query("side == 'sell'")
+    assert len(sells) == 1 and sells["date"].iloc[0] == idx[13]
+
+
+def test_no_force_exit_matrix_means_old_behaviour():
+    idx, cols, data = _event_data(lambda idx, cols: None)
+    assert data.force_exit is None
+    rules = AccountRules(n_hold=2, sell_rank=3, stop_loss=None, drawdown_stop=None, rebalance_every=20,
+                         max_stock_weight=1.0, max_industry_weight=1.0)
+    assert run_account(data, rules).trades.query("side == 'sell'").empty

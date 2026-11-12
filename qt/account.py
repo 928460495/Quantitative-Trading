@@ -54,6 +54,7 @@ class MarketData:
     can_buy: np.ndarray
     can_sell: np.ndarray
     industry: np.ndarray | None = None
+    force_exit: np.ndarray | None = None    # 信号日对齐：点名的持仓第二个交易日卖出，不等调仓日（框架 2.0）
 
 
 def _wide(s: pd.Series, dates: pd.DatetimeIndex, instruments: pd.Index, fill, dtype) -> np.ndarray:
@@ -246,7 +247,7 @@ def run_account(data: MarketData, rules: AccountRules = AccountRules(), exposure
                 slot_limit, cut_reason = tier_slots, "tier"
         rebalance = s % rules.rebalance_every == 0
 
-        # 1. 卖：退市 → 回撤兜底 → 止损 → 排名 → 仓位上限（多出来的按排名从低到高卖）
+        # 1. 卖：退市 → 回撤兜底 → 止损 → 事件点名 → 排名 → 仓位上限（多出来的按排名从低到高卖）
         for col in list(acct.units):
             if i > last_price_day[col]:  # 之后再也没有价格：按最后价格卖出（偏乐观）
                 acct.sell(i, col, "delisted", adj=marks[i, col], raw=raw_marks[i, col])
@@ -258,6 +259,8 @@ def run_account(data: MarketData, rules: AccountRules = AccountRules(), exposure
             elif rules.stop_loss is not None and marks[s, col] <= acct.cost_price[col] * (1 - rules.stop_loss):
                 acct.sell(i, col, "stop")
                 acct.cooldown_until[col] = i + rules.cooldown_days
+            elif data.force_exit is not None and data.force_exit[s, col]:
+                acct.sell(i, col, "event")
             elif rebalance and ranks[col] > rules.sell_rank:
                 acct.sell(i, col, "rank")
         for col in sorted(acct.units, key=lambda c: -ranks[c]):
@@ -285,6 +288,8 @@ def run_account(data: MarketData, rules: AccountRules = AccountRules(), exposure
                 if col in acct.units or not data.can_buy[s, col] or not tradable_today[col]:
                     continue
                 if acct.cooldown_until.get(col, -1) >= i:
+                    continue
+                if data.force_exit is not None and data.force_exit[s, col]:   # 被点名要卖的，自然也不买
                     continue
                 ind = None if data.industry is None else data.industry[s, col]
                 if ind is not None:
