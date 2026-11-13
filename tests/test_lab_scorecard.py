@@ -221,3 +221,60 @@ def test_worst_five_takes_exactly_five_and_ignores_winners():
     win = [(IDX[1], "W", "buy", 100, 10.0, 10_000.0, 0.0, "buy"), (IDX[30], "W", "sell", 100, 11.0, 11_000.0, 0.0, "rank")]
     assert sc.scorecard(_dev_for(), {0: _result(_grow(0.0), win)}).loc["三", "最差五笔占比"] == 0.0
     assert sc.scorecard(_dev_for(), {0: _result(_grow(0.0))}).loc["三", "最差五笔占比"] == 0.0   # 一笔都没有
+
+
+# ---------- 便宜的证据：ST 事件、顶端里带标记的股票 ----------
+
+def _st_frame():
+    idx = pd.bdate_range("2019-01-02", periods=300)
+    cols = ["A", "B", "C"]
+    close = pd.DataFrame(10.0, index=idx, columns=cols)
+    close["A"] = np.r_[np.linspace(10, 5, 260), np.full(40, 4.0)]            # 第 260 天戴帽，之前一年跌一半
+    is_st = pd.DataFrame(False, index=idx, columns=cols)
+    is_st.iloc[260:, 0] = True
+    is_st.iloc[:50, 1] = True                                                  # B 一开始就是 ST：不算新戴帽
+    can_sell = pd.DataFrame(True, index=idx, columns=cols)
+    can_sell.iloc[260:268, 0] = False                                          # 戴帽后连续 8 天卖不掉
+    can_sell.iloc[270:272, 0] = False                                          # 之后又有 2 天（不连续，不算）
+    loss = pd.DataFrame(False, index=idx, columns=cols)
+    loss.iloc[100:, 0] = True                                                  # 戴帽前 160 天就已经扣非为负
+    return idx, close, is_st, can_sell, loss
+
+
+def test_st_events_measure_drop_before_and_lockup_after():
+    idx, close, is_st, can_sell, loss = _st_frame()
+    ev_ = ev.st_events(is_st, close, can_sell, {"deduct_loss": loss})
+    assert list(ev_.index) == ["A"]
+    row = ev_.loc["A"]
+    assert row["date"] == idx[260]
+    assert row["前250天涨跌"] == pytest.approx(close["A"].iloc[260] / close["A"].iloc[10] - 1)
+    assert row["前60天涨跌"] == pytest.approx(close["A"].iloc[260] / close["A"].iloc[200] - 1)
+    assert row["戴帽后连续卖不掉的天数"] == 8
+    assert row["deduct_loss 提前天数"] == 160
+
+
+def test_st_events_without_history_or_flag():
+    idx, close, is_st, can_sell, loss = _st_frame()
+    is_st.iloc[:, 0] = False
+    is_st.iloc[100:, 0] = True                                                 # 前面够 60 天、不够 250 天
+    got = ev.st_events(is_st, close, can_sell, {"deduct_loss": loss & False})
+    assert np.isnan(got.loc["A", "前250天涨跌"]) and not np.isnan(got.loc["A", "前60天涨跌"])
+    assert np.isnan(got.loc["A", "deduct_loss 提前天数"])                      # 戴帽前从没被标记
+
+
+def test_flag_split_in_top_bucket():
+    idx = pd.bdate_range("2019-01-02", periods=200)
+    cols = [f"S{i:03d}" for i in range(200)]
+    rng = np.random.default_rng(2)
+    flagged = np.zeros(200, dtype=bool)
+    flagged[::4] = True                                                        # 每 4 只有 1 只带标记，带标记的每天多跌
+    drift = np.where(flagged, -0.012, 0.0005)
+    close = pd.DataFrame(10 * np.cumprod(1 + drift + rng.normal(0, 0.01, (200, 200)), axis=0), index=idx, columns=cols)
+    score = pd.DataFrame(np.tile(-np.arange(200.0), (200, 1)), index=idx, columns=cols)
+    buy = pd.DataFrame(True, index=idx, columns=cols)
+    flag = pd.DataFrame(np.tile(flagged, (200, 1)), index=idx, columns=cols)
+    got = ev.flag_split(score, close, buy, {"x": flag}, top=50)
+    row = got.loc[("三", "x")]
+    assert row["顶端带标记的比例"] == pytest.approx(0.26, abs=0.02)            # 前 50 名里 13 只
+    assert row["带标记的20天收益"] < row["不带标记的20天收益"]
+    assert row["带标记的跌超20%比例"] > row["不带标记的跌超20%比例"]
