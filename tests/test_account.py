@@ -550,7 +550,7 @@ def test_slot_budget_is_a_share_of_net_value_not_of_remaining_cash():
     idx, cols, data = _flat_data(n_days=45)
     exposure = pd.Series(0.5, index=idx)
     exposure.iloc[20:] = 1.0                                                   # 第 20 个信号日起放到 4 只
-    res = run_account(data, _plain(slot_budget=0.30), exposure)
+    res = run_account(data, _plain(slot_budget=0.15), exposure)
     later = res.trades[(res.trades["side"] == "buy") & (res.trades["date"] > idx[1])]
     assert len(later) == 2
-    assert (later["value"] >= 29_900).all() and (later["value"] <= 30_000).all()   # 净值的 30%，不是剩余现金（约 4 万）的 30%
+    assert (later["value"] >= 14_000).all() and (later["value"] <= 15_000).all()   # 净值的 15%（按一手 1000 元取整），不是剩余现金（约 7 万）的 15%
