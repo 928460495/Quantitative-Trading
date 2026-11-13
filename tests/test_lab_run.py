@@ -88,8 +88,8 @@ def test_refuses_uncommitted_card_and_identical_variant(tmp_path):
 
 def test_refuses_when_budget_is_used_up(tmp_path):
     lab, path = _lab(tmp_path)
-    for _ in range(6):
-        cd.append_run(lab / "runs.jsonl", {"card": "H001"})
+    for i in range(6):
+        cd.append_run(lab / "runs.jsonl", {"card": "H001", "run": i + 1})
     with pytest.raises(cd.CardError, match="最多 6 次"):
         lr.run_card(dev3d()[0], path, lab, None, check_git=False)
 

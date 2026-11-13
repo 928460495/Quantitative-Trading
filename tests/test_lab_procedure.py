@@ -149,3 +149,36 @@ def test_missing_option_is_validated_and_round_trips():
     assert pc.Procedure.from_dict(p.to_dict()) == p and p != pc.PLAN3D
     with pytest.raises(ValueError, match="missing"):
         pc.PLAN3D.replace(missing="median")
+
+
+def test_cache_tells_apart_procedures_that_differ_only_in_how_scores_are_built():
+    # H001 第 1 次运行作废的原因：缓存只按因子族认，"缺失怎么处理"不同的两个流程拿到了同一个合成分
+    dev, _ = dev3d()
+    dev["factors"]["sue"] = dev["factors"]["sue"].copy()
+    dev["factors"]["sue"][dev["close"].columns[:20]] = np.nan
+    cache = {}
+    a = pc.market(dev, pc.PLAN3D, cache=cache)
+    b = pc.market(dev, pc.PLAN3D.replace(missing="zero"), cache=cache)
+    assert not np.array_equal(a.score, b.score, equal_nan=True)
+    fresh = pc.market(dev, pc.PLAN3D.replace(missing="zero"))
+    assert np.array_equal(b.score, fresh.score, equal_nan=True)
+    c = pc.market(dev, pc.PLAN3D.replace(n_hold=30), cache=cache)              # 只改持股数：可以共用
+    assert np.array_equal(a.score, c.score, equal_nan=True) and len(cache) == 2
+
+
+def test_every_field_that_changes_the_composite_is_in_the_cache_key():
+    # 防同类错误：以后给流程加字段，只要它改变合成分而没登记进 SCORE_FIELDS，这里就会失败
+    import dataclasses
+    dev, _ = dev3d()
+    dev["factors"]["sue"] = dev["factors"]["sue"].copy()
+    dev["factors"]["sue"][dev["close"].columns[:20]] = np.nan
+    other = {"families": {"甲": ["bp", "sue"], "乙": ["ret60"]}, "n_hold": 30, "rebalance_every": 10, "sell_mult": 2,
+             "exclude": ["is_st"], "no_buy": [], "exit_next_day": True, "stop_loss": 0.2, "cost_multiplier": 2.0,
+             "missing": "zero"}
+    fields = [f.name for f in dataclasses.fields(pc.Procedure)]
+    assert set(other) == set(fields), "给新字段补一个不同的取值"
+    base = pc.composite(dev, pc.PLAN3D)
+    for name in fields:
+        changed = pc.composite(dev, pc.PLAN3D.replace(**{name: other[name]}))
+        moves = not changed.equals(base)
+        assert moves == (name in pc.SCORE_FIELDS), name

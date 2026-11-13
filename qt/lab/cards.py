@@ -81,11 +81,33 @@ def append_run(path: Path, record: dict) -> None:
         f.write(json.dumps(record, ensure_ascii=False, default=float) + "\n")
 
 
+def valid_runs(runs: list[dict], card_id: str) -> list[dict]:
+    """这张卡没被作废的账户检验记录。作废记录是 {"card", "void": 第几次, "reason"}，追加在台账里。"""
+    void = {r["void"] for r in runs if r.get("card") == card_id and "void" in r}
+    return [r for r in runs if r.get("card") == card_id and "run" in r and r["run"] not in void]
+
+
+def next_run_number(runs: list[dict], card_id: str) -> int:
+    return sum(1 for r in runs if r.get("card") == card_id and "run" in r) + 1
+
+
+def void_record(runs: list[dict], card_id: str, run: int, reason: str) -> dict:
+    """作废某一次运行（比如程序错误让结果无效）。只追加记录，不删原来的；作废的不占预算，编号不复用。"""
+    from datetime import datetime, timezone
+
+    if not any(r.get("card") == card_id and r.get("run") == run for r in runs):
+        raise CardError(f"{card_id} 没有第 {run} 次运行")
+    if not str(reason or "").strip():
+        raise CardError("作废要写明原因")
+    return {"time": datetime.now(timezone.utc).isoformat(timespec="seconds"), "card": card_id, "void": run,
+            "reason": reason}
+
+
 def check_budget(card: dict, cards: list[dict], runs: list[dict]) -> None:
     """能不能再跑一次这张卡；不能就报 CardError 并说明是哪条预算。"""
     if card["status"] != REGISTERED:
         raise CardError(f"{card['id']} 已经有结论（{card['status']}），不能再跑")
-    used = sum(r["card"] == card["id"] for r in runs)
+    used = len(valid_runs(runs, card["id"]))
     if used >= MAX_RUNS_PER_CARD:
         raise CardError(f"{card['id']} 已经跑了 {used} 次，一张卡最多 {MAX_RUNS_PER_CARD} 次")
     if len(cards) > MAX_CARDS:

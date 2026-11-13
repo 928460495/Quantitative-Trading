@@ -93,12 +93,21 @@ def _any(dev: dict, names: tuple[str, ...], like: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+SCORE_FIELDS = ("families", "missing")      # 决定合成分的字段；加了新的影响合成分的字段，必须加进这里
+
+
+def score_key(proc: Procedure) -> tuple:
+    """缓存合成分用的钥匙：只含决定合成分的字段（H001 第 1 次运行因为钥匙里漏了 missing 而作废）。"""
+    return tuple(getattr(proc, f) for f in SCORE_FIELDS)
+
+
 def market(dev: dict, proc: Procedure, offset: int = 0, cache: dict | None = None) -> MarketData:
-    """offset：从第几个交易日开始跑（错开调仓起点）。cache：同一个 dev 上复用合成分（按 families 存）。"""
+    """offset：从第几个交易日开始跑（错开调仓起点）。cache：同一个 dev 上复用合成分。"""
     cache = {} if cache is None else cache
-    if proc.families not in cache:
-        cache[proc.families] = composite(dev, proc)
-    score = cache[proc.families]
+    key = score_key(proc)
+    if key not in cache:
+        cache[key] = composite(dev, proc)
+    score = cache[key]
     drop = _any(dev, proc.exclude, score)
     can_buy = dev["can_buy"].reindex(index=score.index, columns=score.columns).fillna(False).astype(bool)
     can_buy = can_buy & ~(drop | _any(dev, proc.no_buy, score))

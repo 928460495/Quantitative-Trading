@@ -91,7 +91,7 @@ def run_card(dev: dict, card_path: Path, lab: Path, trials: Path | None, check_g
     cd.check_budget(card, cd.load_cards(card_path.parent), runs)
     baseline = cd.load_baseline(lab / "baseline.yaml")
     out = evaluate(dev, card, baseline)
-    run_no = sum(r["card"] == card["id"] for r in runs) + 1
+    run_no = cd.next_run_number(runs, card["id"])
     full = lambda df, col: float(df.loc[FULL, col])
     record = {"time": datetime.now(timezone.utc).isoformat(timespec="seconds"), "commit": _git_commit(),
               "framework": FRAMEWORK_VERSION, "card": card["id"], "run": run_no, "kind": card["kind"],

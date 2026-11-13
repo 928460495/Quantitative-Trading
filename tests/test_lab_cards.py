@@ -70,10 +70,11 @@ def _cards(*specs):
 
 def test_budget_per_card_and_status():
     cards = _cards(("H001", "甲", "已登记"))
-    cd.check_budget(cards[0], cards, [{"card": "H001"}] * 5)
+    run = lambda c, n: [{"card": c, "run": i + 1} for i in range(n)]
+    cd.check_budget(cards[0], cards, run("H001", 5))
     with pytest.raises(cd.CardError, match="最多 6 次"):
-        cd.check_budget(cards[0], cards, [{"card": "H001"}] * 6)
-    cd.check_budget(cards[0], cards, [{"card": "H002"}] * 9)                  # 别的卡的次数不算
+        cd.check_budget(cards[0], cards, run("H001", 6))
+    cd.check_budget(cards[0], cards, run("H002", 9))                         # 别的卡的次数不算
     done = {**cards[0], "status": "未采纳"}
     with pytest.raises(cd.CardError, match="已经有结论"):
         cd.check_budget(done, [done], [])
@@ -118,3 +119,21 @@ def test_runs_append_only(tmp_path):
     cd.append_run(path, {"card": "H001", "x": 1.5})
     cd.append_run(path, {"card": "H001", "x": "中文"})
     assert cd.load_runs(path) == [{"card": "H001", "x": 1.5}, {"card": "H001", "x": "中文"}]
+
+
+def test_void_runs_do_not_use_budget_but_keep_their_numbers():
+    runs = [{"card": "H001", "run": 1, "adopt": False}, {"card": "H001", "void": 1, "reason": "缓存钥匙漏了 missing"},
+            {"card": "H002", "run": 1, "adopt": True}]
+    assert cd.valid_runs(runs, "H001") == [] and len(cd.valid_runs(runs, "H002")) == 1
+    assert cd.next_run_number(runs, "H001") == 2                               # 作废的编号不复用
+    cards = _cards(("H001", "甲", "已登记"))
+    full = [{"card": "H001", "run": i, "adopt": False} for i in range(1, 7)]
+    with pytest.raises(cd.CardError, match="最多 6 次"):
+        cd.check_budget(cards[0], cards, full)
+    cd.check_budget(cards[0], cards, full + [{"card": "H001", "void": 3, "reason": "x"}])
+    with pytest.raises(cd.CardError, match="没有第 9 次"):
+        cd.void_record(full, "H001", 9, "x")
+    rec = cd.void_record(full, "H001", 2, "程序错误")
+    assert rec["card"] == "H001" and rec["void"] == 2 and rec["reason"] == "程序错误" and "time" in rec
+    with pytest.raises(cd.CardError, match="写明原因"):
+        cd.void_record(full, "H001", 2, "  ")
