@@ -67,10 +67,11 @@ def st_events(is_st: pd.DataFrame, close: pd.DataFrame, can_sell: pd.DataFrame, 
         while t + locked < len(sell) and not sell[t + locked, j]:
             locked += 1
         row = {"date": close.index[t], "前250天涨跌": back(250), "前60天涨跌": back(60), "戴帽后连续卖不掉的天数": locked}
+        traded = np.flatnonzero(~np.isnan(close[code].to_numpy(dtype=float)[:t]))   # 戴帽前有价格的日子（停牌日跳过）
         for name, f in flags.items():
             on = f[code].reindex(close.index).fillna(False).to_numpy(dtype=bool) if code in f else np.zeros(len(s), bool)
             lead = 0
-            while t - lead - 1 >= 0 and on[t - lead - 1]:
+            while lead < len(traded) and on[traded[-1 - lead]]:
                 lead += 1
             row[f"{name} 提前天数"] = lead if lead else np.nan
         rows[code] = row

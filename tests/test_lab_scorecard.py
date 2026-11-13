@@ -253,6 +253,18 @@ def test_st_events_measure_drop_before_and_lockup_after():
     assert row["deduct_loss 提前天数"] == 160
 
 
+def test_st_events_skip_suspended_days_when_counting_lead():
+    # 实际数据里戴帽前一天常常停牌：那天价格和现算的标记都是空的，不能把"事前亮着"的连续天数打断
+    idx, close, is_st, can_sell, loss = _st_frame()
+    close.iloc[258:260, 0] = np.nan                                            # 戴帽前停牌两天
+    small = pd.DataFrame(False, index=idx, columns=close.columns)
+    small.iloc[150:258, 0] = True                                              # 停牌前一直亮着
+    got = ev.st_events(is_st, close, can_sell, {"deduct_loss": loss, "small30": small})
+    assert got.loc["A", "small30 提前天数"] == 108                             # 只数有价格的日子
+    assert got.loc["A", "deduct_loss 提前天数"] == 158                         # 季报标记停牌日也亮着，同样只数有价格的日子
+    assert got.loc["A", "前60天涨跌"] == pytest.approx(close["A"].ffill().iloc[260] / close["A"].ffill().iloc[200] - 1)
+
+
 def test_st_events_without_history_or_flag():
     idx, close, is_st, can_sell, loss = _st_frame()
     is_st.iloc[:, 0] = False
