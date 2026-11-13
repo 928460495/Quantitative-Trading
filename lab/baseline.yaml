@@ -8,6 +8,9 @@ history:
 - date: '2026-11-13'
   card: H001
   note: 合成时缺失的组按 0（截面平均）计入（第 2 次账户检验采纳；第 1 次因程序错误作废）
+- date: '2026-11-13'
+  card: H002
+  note: 去掉"跌得多"组（第 1 次账户检验采纳）
 procedure:
   families:
     业绩超预期:
@@ -21,15 +24,6 @@ procedure:
     - gtja100
     - gtja081
     - gtja132
-    跌得多:
-    - ret60
-    - ret120
-    - high52w
-    - lit_high52w
-    - a158_MA60
-    - a158_QTLU60
-    - a158_ROC60
-    - a158_MAX60
   n_hold: 15
   rebalance_every: 20
   sell_mult: 3
