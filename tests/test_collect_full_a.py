@@ -377,3 +377,71 @@ def test_quarantine_moves_files_so_daily_refetches_them(tmp_path):
     assert not (raw / "daily" / "SH600028.csv").exists()
     assert (raw / "daily_incomplete" / "SH600028.csv").exists()
     assert (raw / "daily" / "SH600690.csv").exists()
+
+
+class DatedBs(FakeBs):
+    """按 start_date 只返回之后的行：已有 2015-07-01、07-02，服务器上多了 07-03。"""
+
+    DAYS = ["2015-07-01", "2015-07-02", "2015-07-03"]
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.starts: dict[str, str] = {}
+
+    def query_history_k_data_plus(self, code, fields, start_date=None, end_date=None, frequency="d", adjustflag="3"):
+        self.calls.append(code)
+        self.starts[code] = start_date
+        if code in self.broken:
+            raise ConnectionError("网络接收错误")
+        rows = []
+        for d in self.DAYS:
+            if start_date is None or d >= start_date:
+                r = [v.format(code=code) for v in DAILY_ROW]
+                r[0] = d
+                rows.append(r)
+        return FakeRS(fields.split(","), rows)
+
+
+def test_update_daily_appends_only_new_days(tmp_path):
+    collect.collect_daily(FakeBs(), ["SH600000"], tmp_path)                 # 已有 07-01、07-02
+    bs = DatedBs()
+    status = collect.update_daily(bs, ["SH600000"], tmp_path)
+    assert bs.starts["sh.600000"] == "2015-07-03"
+    df = pd.read_csv(tmp_path / "SH600000.csv")
+    assert list(df["date"]) == ["2015-07-01", "2015-07-02", "2015-07-03"]
+    assert status["SH600000"] == "ok +1"
+    again = collect.update_daily(DatedBs(), ["SH600000"], tmp_path)          # 再跑一次：没有新行，不重复
+    assert len(pd.read_csv(tmp_path / "SH600000.csv")) == 3 and again["SH600000"] == "ok +0"
+
+
+def test_update_daily_fetches_new_listing_in_full(tmp_path):
+    bs = DatedBs()
+    status = collect.update_daily(bs, ["SZ000001"], tmp_path)
+    assert bs.starts["sz.000001"] == "2009-01-01"
+    assert len(pd.read_csv(tmp_path / "SZ000001.csv")) == 3 and status["SZ000001"] == "ok +3"
+
+
+def test_update_daily_failure_keeps_old_file(tmp_path):
+    collect.collect_daily(FakeBs(), ["SH600000"], tmp_path)
+    status = collect.update_daily(DatedBs(broken={"sh.600000"}), ["SH600000"], tmp_path, retries=2)
+    assert status["SH600000"].startswith("failed")
+    assert len(pd.read_csv(tmp_path / "SH600000.csv")) == 2
+
+
+def test_refresh_reports_refetches_latest_periods_only(tmp_path):
+    d = tmp_path / "income"
+    d.mkdir()
+    dates = collect.report_dates()
+    for rd in dates[-3:]:
+        (d / f"{rd}.csv").write_text("old\n")
+    removed = collect.drop_latest_reports(tmp_path, ["income"], n=2)
+    assert removed == 2
+    assert (d / f"{dates[-3]}.csv").exists()
+    assert not (d / f"{dates[-1]}.csv").exists() and not (d / f"{dates[-2]}.csv").exists()
+
+
+def test_update_daily_never_duplicates_days_even_if_server_ignores_start(tmp_path):
+    collect.collect_daily(FakeBs(), ["SH600000"], tmp_path)
+    status = collect.update_daily(FakeBs(), ["SH600000"], tmp_path)        # FakeBs 不管 start，总是返回 07-01、07-02
+    assert list(pd.read_csv(tmp_path / "SH600000.csv")["date"]) == ["2015-07-01", "2015-07-02"]
+    assert status["SH600000"] == "ok +0"

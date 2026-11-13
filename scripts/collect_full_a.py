@@ -154,6 +154,60 @@ def collect_daily(bs, instruments: list[str], out_dir: Path, start: str = "2009-
     return status
 
 
+
+def update_daily(bs, instruments: list[str], out_dir: Path, start: str = "2009-01-01", retries: int = 3,
+                 pause: float = 0.0, progress_every: int = 200) -> dict[str, str]:
+    """增量更新日线（纸面跟单用，计划 5 任务 4a）：已有数据的股票只请求文件最后一天之后的行并追加；
+    没有文件或只有表头的，从 start 起全取。失败的保留原文件不动。状态写 "ok +新增行数" 或 "failed: ..."。"""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    status: dict[str, str] = {}
+    started = time.time()
+    for n, instrument in enumerate(instruments, 1):
+        if n % progress_every == 0:
+            failed = sum(v.startswith("failed") for v in status.values())
+            print(f"  日线更新 {n}/{len(instruments)}，失败 {failed}，已用 {(time.time() - started) / 60:.0f} 分钟", flush=True)
+        path = out_dir / f"{instrument}.csv"
+        old = pd.read_csv(path, dtype=str) if path.exists() else pd.DataFrame(columns=DAILY_FIELDS.split(","))
+        since = start if old.empty else str((pd.Timestamp(old["date"].max()) + pd.Timedelta(days=1)).date())
+        df = None
+        for attempt in range(1, retries + 1):
+            try:
+                df = _fetch_daily(bs, instrument, since, None)
+                break
+            except Exception as e:
+                if attempt == retries:
+                    status[instrument] = f"failed: {type(e).__name__}: {e}"
+                else:
+                    time.sleep(pause * 2**attempt)
+                    try:
+                        bs.login()
+                    except Exception:
+                        pass
+        if df is None:
+            continue
+        df = df.astype(str)
+        fresh = df[~df["date"].isin(set(old["date"]))] if len(df) else df
+        if len(fresh) or not path.exists():
+            merged = pd.concat([old, fresh], ignore_index=True).sort_values("date") if len(old) else fresh
+            if merged.empty:
+                merged = pd.DataFrame(columns=DAILY_FIELDS.split(","))
+            _write_atomic(merged, path)
+        status[instrument] = f"ok +{len(fresh)}"
+        time.sleep(pause)
+    return status
+
+
+def drop_latest_reports(out_dir: Path, names: list[str], n: int = 2) -> int:
+    """删掉最近 n 个报告期的财务文件，下次 collect_reports 会重新下载（这些期的公告可能还没出全）。"""
+    removed = 0
+    for rd in report_dates()[-n:]:
+        for name in names:
+            path = out_dir / name / f"{rd}.csv"
+            if path.exists():
+                path.unlink()
+                removed += 1
+    return removed
+
 EASTMONEY_URL = "https://datacenter-web.eastmoney.com/api/data/v1/get"
 _A_SHARE_FILTER = '(SECURITY_TYPE_CODE in ("058001001","058001008"))(TRADE_MARKET_CODE!="069001017")'
 # 表名 → （接口里的报表名，报告期字段名）；三张 DMSK 表的筛选条件沿用 AkShare
@@ -431,7 +485,8 @@ def main() -> None:
     import argparse
 
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--part", default="all", choices=["all", "list", "daily", "check", "reports", "index", "pack"])
+    ap.add_argument("--part", default="all", choices=["all", "update", "list", "daily", "check", "reports", "index", "pack"],
+                    help="update：纸面跟单用的增量更新（股票列表 → 日线补最新几天 → 重取最近两期财务 → 指数 → 检查 → 打包）")
     ap.add_argument("--fix", action="store_true", help="--part check 时把不完整的日线文件移走，再跑 --part daily 重新下载")
     ap.add_argument("--allow-incomplete", action="store_true",
                     help="打包时允许有不完整的日线（重新下载后仍然一样，说明 baostock 本身就缺，才用这个）")
@@ -443,10 +498,11 @@ def main() -> None:
     args = ap.parse_args()
     raw_dir: Path = args.raw_dir
     raw_dir.mkdir(parents=True, exist_ok=True)
-    parts = ["list", "daily", "check", "reports", "index", "pack"] if args.part == "all" else [args.part]
+    parts = {"all": ["list", "daily", "check", "reports", "index", "pack"],
+             "update": ["list", "update", "reports", "index", "check", "pack"]}.get(args.part, [args.part])
 
     bs = None
-    if {"list", "daily"} & set(parts):
+    if {"list", "daily", "update"} & set(parts):
         import socket
 
         import baostock
@@ -485,6 +541,16 @@ def main() -> None:
         else:
             status = collect_daily(bs, todo, raw_dir / "daily", start=args.start, retries=args.retries, pause=args.pause)
         _save_status(raw_dir, "daily", status)
+    if "update" in parts:
+        stocks = pd.read_csv(raw_dir / "stocks.csv", dtype=str, keep_default_na=False)
+        out = pd.to_datetime(stocks["out_date"].replace("", None), errors="coerce")
+        todo = list(stocks.loc[out.isna() | (out >= pd.Timestamp.today() - pd.Timedelta(days=60)), "instrument"])
+        print(f"日线增量更新：{len(todo)} 只（在市和近 60 天退市的）", flush=True)
+        status = update_daily(bs, todo, raw_dir / "daily", start=args.start, retries=args.retries, pause=args.pause)
+        print(f"  新增行数合计 {sum(int(v.split('+')[1]) for v in status.values() if v.startswith('ok'))}，"
+              f"失败 {sum(v.startswith('failed') for v in status.values())} 只", flush=True)
+        _save_status(raw_dir, "daily", {k: "ok" if v.startswith("ok") else v for k, v in status.items()})
+        print(f"重新下载最近两个报告期的财务：删掉 {drop_latest_reports(raw_dir / 'reports', list(REPORTS))} 个旧文件")
     if bs is not None:
         bs.logout()
     if "reports" in parts:
