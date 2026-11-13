@@ -4,7 +4,7 @@
     python scripts/build_plan3d_flags.py
 
     is_st.parquet        当天是不是 ST、*ST（baostock 日线 isST；缺记录的日子沿用上一个已知状态）
-    loss_small.parquet   亏损且营业收入不足 3 亿元（滚动四季，按公告日对齐；现行退市规则的提前量）
+    loss_small.parquet   亏损且营业收入低于当时有效的退市门槛（滚动四季，按公告日对齐；门槛见 qt/plan3d.revenue_floor）
 
 规则见 docs/DECISIONS.md 2026-11-12「计划 3d 事先登记的规则」。日期和股票取缓存里 close.parquet 的，
 训练段、验证段各算各的；不碰测试段（取数经过 check_range）。
@@ -20,7 +20,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
-from qt.plan3d import loss_small_revenue  # noqa: E402
+from qt.plan3d import loss_small_revenue, revenue_floor  # noqa: E402
 
 FIELDS = ("net_profit_ttm", "deduct_net_profit_ttm", "revenue_ttm")
 REVENUE_RANGE = (1e8, 1e11)      # 全市场滚动四季营收的中位数应该落在 1 亿 ~ 1000 亿元之间
@@ -33,7 +33,7 @@ def build_flags(close: pd.DataFrame, is_st: pd.Series, fund: dict[str, pd.DataFr
     st = st.reindex(st.index.union(idx)).sort_index().ffill().reindex(idx)
     al = lambda k: fund[k].reindex(index=idx, columns=cols)
     return {"is_st": (st.fillna(0) > 0).astype(bool),
-            "loss_small": loss_small_revenue(*(al(k) for k in FIELDS))}
+            "loss_small": loss_small_revenue(*(al(k) for k in FIELDS), revenue_floor(idx))}
 
 
 def check_units(revenue_ttm: pd.DataFrame) -> float:

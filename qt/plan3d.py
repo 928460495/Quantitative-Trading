@@ -74,11 +74,29 @@ CHECKS: dict[str, tuple[str, ...]] = {
 OFFSETS = CHECKS["2 错开调仓起点都高于能持有等权"]
 
 
+# 主板"亏损且营收低于门槛"这条退市指标，按当时已经公开的规则（复查 R001 的 M1：不能把 2024 年的 3 亿元用到更早）。
+# 2020-12-14 退市新规征求意见稿公开（营收 1 亿元）；2024-04-12 新规征求意见稿公开（主板 3 亿元）；之前没有这条指标。
+REVENUE_FLOOR_HISTORY = ((pd.Timestamp("2020-12-14"), 1e8), (pd.Timestamp("2024-04-12"), 3e8))
+
+
+def revenue_floor(dates: pd.DatetimeIndex) -> pd.Series:
+    """每个交易日有效的营收门槛（元）；还没有这条规则时为 0，即永远不触发。"""
+    dates = pd.DatetimeIndex(dates)
+    out = pd.Series(0.0, index=dates)
+    for start, floor in REVENUE_FLOOR_HISTORY:
+        out[dates >= start] = floor
+    return out
+
+
 def loss_small_revenue(net_profit_ttm: pd.DataFrame, deduct_ttm: pd.DataFrame, revenue_ttm: pd.DataFrame,
-                       floor: float = REVENUE_FLOOR) -> pd.DataFrame:
-    """亏损（净利润、扣非净利润的滚动四季值有一个为负）且滚动四季营收低于 floor。数据缺失不算。"""
+                       floor: float | pd.Series = REVENUE_FLOOR) -> pd.DataFrame:
+    """亏损（净利润、扣非净利润的滚动四季值有一个为负）且滚动四季营收低于 floor。数据缺失不算。
+
+    floor 可以是一个数，也可以是按日期的序列（revenue_floor 的结果，按行对齐）。
+    """
     loss = (net_profit_ttm < 0) | (deduct_ttm < 0)
-    return (loss & (revenue_ttm < floor)).fillna(False).astype(bool)
+    small = revenue_ttm.lt(floor.reindex(revenue_ttm.index), axis=0) if isinstance(floor, pd.Series) else revenue_ttm < floor
+    return (loss & small).fillna(False).astype(bool)
 
 
 def high_vol(vol_score: pd.DataFrame, cut: float) -> pd.DataFrame:

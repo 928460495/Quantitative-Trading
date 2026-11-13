@@ -86,6 +86,8 @@ def main() -> None:
     base = cd.load_baseline(ROOT / "lab" / "baseline.yaml")
     if not cd.is_committed(ROOT / "lab" / "baseline.yaml"):
         sys.exit("lab/baseline.yaml 有没提交的改动")
+    if not cd.code_is_committed(ROOT):
+        sys.exit("qt/ 或 scripts/ 有没提交的改动：先提交代码再运行")
     print("读取开发段数据…", flush=True)
     dev = load_dev(latest_version(POOL_CACHE), base.factors())
     checks, versions = readiness(dev, base, log=TRIALS)

@@ -122,3 +122,24 @@ def test_qlib_factor_values_do_not_depend_on_later_data(name):
     long = _qlib_wide(codes, {name: DEFS[name].formula}, "2016-01-01", "2018-12-31")[name]
     assert short.notna().to_numpy().sum() > 100
     pd.testing.assert_frame_equal(short, long.loc[short.index, short.columns], check_freq=False)
+
+
+CURRENT = pc.PLAN3D.replace(missing="zero", blend="rank",
+                            families={"业绩超预期": ["sue"], "便宜": ["ep_deduct", "bp", "sp_ttm"],
+                                      "冷门": ["turn_12m", "gtja100", "gtja081", "gtja132"]})
+
+
+@pytest.mark.parametrize("offset", [0, 5, 15])
+def test_current_baseline_ignores_the_future_at_every_start(offset):
+    # 复查 R001 的 S4：现行基线（排名平均、缺失按 0 计入）和错开的调仓起点都要查
+    dev, _ = dev3d()
+    cut = 300
+    fut = _scramble_dev(dev, cut)
+    a, b = pc.market(dev, CURRENT, offset), pc.market(fut, CURRENT, offset)
+    k = cut - offset
+    for field in ("can_buy", "can_sell", "adj_close", "raw_close"):
+        assert np.array_equal(getattr(a, field)[:k], getattr(b, field)[:k], equal_nan=True), field
+    assert np.array_equal(np.isnan(a.score[:k]), np.isnan(b.score[:k]))
+    np.testing.assert_allclose(a.score[:k], b.score[:k], rtol=0, atol=1e-12)
+    ra, rb = pc.run(dev, CURRENT, offset), pc.run(fut, CURRENT, offset)
+    pd.testing.assert_series_equal(ra.daily["nav"].iloc[:k], rb.daily["nav"].iloc[:k])

@@ -287,3 +287,20 @@ def test_evaluate_table_logs_each_variant_and_finds_the_signal():
     assert [k for k, _, _ in logged] == ["plan3d"] * 4
     assert [p["variant"] for _, p, _ in logged] == list(variants) and {p["segment"] for _, p, _ in logged} == {"train"}
     assert logged[0][1]["n_hold"] == 15 and set(logged[0][2]) == {"annual_return", "sharpe", "max_drawdown"}
+
+
+def test_revenue_floor_follows_the_rule_in_force_on_each_day():
+    # 复查 R001 的 M1：营收门槛按当时有效的退市规则，不能把 2024 年的 3 亿元用到更早
+    idx = pd.to_datetime(["2020-12-11", "2020-12-14", "2021-06-01", "2024-04-11", "2024-04-12", "2026-01-05"])
+    assert p3.revenue_floor(idx).tolist() == [0.0, 1e8, 1e8, 1e8, 3e8, 3e8]
+
+
+def test_loss_small_uses_the_dated_floor():
+    idx = pd.to_datetime(["2019-06-03", "2021-06-01", "2024-06-03"])
+    cols = ["A", "B"]
+    f = lambda *rows: pd.DataFrame(list(rows), index=idx, columns=cols, dtype=float)
+    net = f([-1, -1], [-1, -1], [-1, -1])
+    ded = f([-1, -1], [-1, -1], [-1, -1])
+    rev = f([5e7, 2e8], [5e7, 2e8], [5e7, 2e8])
+    got = p3.loss_small_revenue(net, ded, rev, p3.revenue_floor(idx))
+    assert got.to_numpy().tolist() == [[False, False], [True, False], [True, True]]   # 2019 年还没有这条规则

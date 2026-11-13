@@ -14,7 +14,7 @@ bf = importlib.util.module_from_spec(spec)
 sys.modules["build_plan3d_flags"] = bf
 spec.loader.exec_module(bf)
 
-IDX = pd.bdate_range("2015-01-05", periods=6)
+IDX = pd.bdate_range("2024-06-03", periods=6)                              # 主板营收门槛 3 亿元的时期
 COLS = ["SH600000", "SH600001", "SZ000002"]
 
 
@@ -51,7 +51,7 @@ def test_st_status_carries_over_missing_days_but_not_backwards():
 
 
 def test_fundamentals_outside_cached_dates_are_ignored():
-    wide = pd.bdate_range("2014-12-29", periods=12)
+    wide = pd.bdate_range("2024-05-27", periods=12)
     fund = _fund([-1] * 3, [-1] * 3, [1e8] * 3, idx=wide)
     fund["revenue_ttm"].loc[IDX[3]:, "SH600001"] = 5e8
     got = bf.build_flags(_close(), _st([(0, "SH600000", 0)]), fund)["loss_small"]
@@ -75,5 +75,14 @@ def test_yearly_share_is_among_buyable_stocks():
     flag["SH600000"] = True
     buy = pd.DataFrame(True, index=IDX, columns=COLS)
     buy["SZ000002"] = False
-    assert bf.yearly_share(flag, buy).to_dict() == {2015: pytest.approx(0.5)}
-    assert bf.yearly_share(flag, buy & False).to_dict() == {2015: 0.0}
+    assert bf.yearly_share(flag, buy).to_dict() == {2024: pytest.approx(0.5)}
+    assert bf.yearly_share(flag, buy & False).to_dict() == {2024: 0.0}
+
+
+def test_no_revenue_rule_before_december_2020():
+    idx = pd.bdate_range("2015-01-05", periods=3)
+    close = pd.DataFrame(10.0, index=idx, columns=["SH600000"])
+    fund = {k: pd.DataFrame({"SH600000": v}, index=idx) for k, v in
+            (("net_profit_ttm", -1.0), ("deduct_net_profit_ttm", -1.0), ("revenue_ttm", 1e7))}
+    st = pd.Series([0], index=pd.MultiIndex.from_tuples([(idx[0], "SH600000")], names=["datetime", "instrument"]))
+    assert not bf.build_flags(close, st, fund)["loss_small"].any().any()      # 亏损、营收只有 1000 万，但那时没有这条规则

@@ -67,6 +67,12 @@ def is_committed(path: Path) -> bool:
     return git("status", "--porcelain", "--", path.name).stdout.strip() == ""
 
 
+def code_is_committed(root: Path, dirs: tuple[str, ...] = ("qt", "scripts")) -> bool:
+    """qt/、scripts/ 下没有没提交的改动（含新文件）：运行结果才能对应到确定的代码（复查 R001 的 S5）。"""
+    out = subprocess.run(["git", "status", "--porcelain", "--", *dirs], cwd=Path(root), capture_output=True, text=True)
+    return out.returncode == 0 and out.stdout.strip() == ""
+
+
 def load_runs(path: Path) -> list[dict]:
     path = Path(path)
     if not path.exists():

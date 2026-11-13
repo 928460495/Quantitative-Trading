@@ -87,6 +87,8 @@ def run_card(dev: dict, card_path: Path, lab: Path, trials: Path | None, check_g
         raise cd.CardError(f"{card_path.name} 还没提交，或者提交后被改过：先提交卡片再运行")
     if check_git and not cd.is_committed(lab / "baseline.yaml"):
         raise cd.CardError("lab/baseline.yaml 有没提交的改动")
+    if check_git and not cd.code_is_committed(lab.parent):
+        raise cd.CardError("qt/ 或 scripts/ 有没提交的改动：先提交代码再运行")
     runs = cd.load_runs(lab / "runs.jsonl")
     cd.check_budget(card, cd.load_cards(card_path.parent), runs)
     baseline = cd.load_baseline(lab / "baseline.yaml")

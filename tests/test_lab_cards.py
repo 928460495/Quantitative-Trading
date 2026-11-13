@@ -157,3 +157,21 @@ def test_a_rejected_change_cannot_come_back_under_another_label():
     cd.check_budget(different, [old, different], [])
     adopted = {**old, "status": "已采纳"}
     cd.check_budget(again, [adopted, again], [])                               # 只拦被否决的
+
+
+def test_code_must_be_committed_before_a_run(tmp_path):
+    # 复查 R001 的 S5：结果要能对应到确定的代码
+    run = lambda *a: subprocess.run(["git", *a], cwd=tmp_path, check=True, capture_output=True)
+    run("init", "-q"); run("config", "user.email", "t@t"); run("config", "user.name", "t")
+    for d in ("qt", "scripts", "docs"):
+        (tmp_path / d).mkdir()
+        (tmp_path / d / "a.py").write_text("x = 1\n")
+    run("add", "-A"); run("commit", "-q", "-m", "x")
+    assert cd.code_is_committed(tmp_path)
+    (tmp_path / "docs" / "a.py").write_text("x = 2\n")
+    assert cd.code_is_committed(tmp_path)                                     # 文档改动不算
+    (tmp_path / "qt" / "a.py").write_text("x = 2\n")
+    assert not cd.code_is_committed(tmp_path)
+    run("checkout", "--", "qt/a.py")
+    (tmp_path / "scripts" / "new.py").write_text("y = 1\n")
+    assert not cd.code_is_committed(tmp_path)                                 # 新文件没提交也不行
