@@ -14,6 +14,7 @@ from functools import reduce
 import pandas as pd
 
 from qt.account import AccountResult, AccountRules, MarketData, run_account
+from qt.lab import overlay
 from qt.composite import category_scores, composite as blend, neutral_composite
 from qt.plan3d import GROUPS
 from qt.wide_eval import _market_data, neutralize, zscore
@@ -21,6 +22,7 @@ from qt.wide_eval import _market_data, neutralize, zscore
 MAX_STOCK_WEIGHT, MAX_INDUSTRY_WEIGHT, MIN_TRADE, COOLDOWN_DAYS = 0.20, 0.30, 2000.0, 20
 MISSING = ("skip", "zero")
 BLENDS = ("z", "rank")
+OVERLAYS = ("none", "value_trend")
 
 
 @dataclass(frozen=True)
@@ -36,6 +38,10 @@ class Procedure:
     cost_multiplier: float = 1.0
     missing: str = "skip"                                       # 某组分数缺失：skip 只平均有的组；zero 按 0（截面平均）计入
     blend: str = "z"                                            # 族间合成：z 平均各组标准分；rank 平均各组百分位排名（居中到 ±0.5）
+    overlay: str = "none"                                       # 仓位规则：none 一直按 n_hold 满仓；value_trend 估值 + 趋势（qt/lab/overlay.py）
+    overlay_low: float = 0.25                                   # 估值 + 趋势的股票比例下限、上限
+    overlay_high: float = 0.75
+    cash_yield: float = 0.0                                     # 现金年化利息
 
     def __post_init__(self):
         # 规范写法：族按名字排、排除名单去重排序。这样写进文件再读回来、或者字典顺序不同，都还是同一个流程
@@ -46,6 +52,8 @@ class Procedure:
             raise ValueError(f"missing 只能是 {MISSING}：{self.missing}")
         if self.blend not in BLENDS:
             raise ValueError(f"blend 只能是 {BLENDS}：{self.blend}")
+        if self.overlay not in OVERLAYS:
+            raise ValueError(f"overlay 只能是 {OVERLAYS}：{self.overlay}")
 
     def factors(self) -> tuple[str, ...]:
         return tuple(f for _, fs in self.families for f in fs)
@@ -132,8 +140,26 @@ def rules(proc: Procedure) -> AccountRules:
     return AccountRules(n_hold=proc.n_hold, sell_rank=proc.sell_mult * proc.n_hold, max_stock_weight=MAX_STOCK_WEIGHT,
                         max_industry_weight=MAX_INDUSTRY_WEIGHT, stop_loss=proc.stop_loss, cooldown_days=COOLDOWN_DAYS,
                         drawdown_stop=None, drawdown_tiers=None, cost_multiplier=proc.cost_multiplier,
-                        rebalance_every=proc.rebalance_every, min_trade=MIN_TRADE)
+                        rebalance_every=proc.rebalance_every, min_trade=MIN_TRADE,
+                        slot_budget=None if proc.overlay == "none" else proc.overlay_high / proc.n_hold,
+                        cash_yield=proc.cash_yield)
+
+
+def exposure(dev: dict, proc: Procedure, dates: pd.DatetimeIndex) -> pd.Series | None:
+    """估值 + 趋势：每天的持股比例 = 持股只数上限 ÷ n_hold（从这次运行的第一天起每 20 天更新）。没有仓位规则时为 None。
+
+    信号可以放在 dev["overlay_signals"]（测试用）；没有就从上证月度文件读（未解锁时不含封存段）。
+    """
+    if proc.overlay == "none":
+        return None
+    sig = dev.get("overlay_signals")
+    if sig is None:
+        sig = overlay.monthly_signals(overlay.load_monthly())
+    f = overlay.daily_target(sig, dates, proc.overlay_low, proc.overlay_high)
+    k = overlay.slot_counts(f, proc.n_hold, proc.overlay_high, overlay.EVERY, overlay.BAND)
+    return (k / proc.n_hold + 1e-9).rename("exposure")
 
 
 def run(dev: dict, proc: Procedure, offset: int = 0, cache: dict | None = None) -> AccountResult:
-    return run_account(market(dev, proc, offset, cache), rules(proc))
+    data = market(dev, proc, offset, cache)
+    return run_account(data, rules(proc), exposure(dev, proc, data.dates))

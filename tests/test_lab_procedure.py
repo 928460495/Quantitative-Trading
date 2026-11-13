@@ -174,7 +174,8 @@ def test_every_field_that_changes_the_composite_is_in_the_cache_key():
     dev["factors"]["sue"][dev["close"].columns[:20]] = np.nan
     other = {"families": {"甲": ["bp", "sue"], "乙": ["ret60"]}, "n_hold": 30, "rebalance_every": 10, "sell_mult": 2,
              "exclude": ["is_st"], "no_buy": [], "exit_next_day": True, "stop_loss": 0.2, "cost_multiplier": 2.0,
-             "missing": "zero", "blend": "rank"}
+             "missing": "zero", "blend": "rank", "overlay": "value_trend", "overlay_low": 0.2, "overlay_high": 0.85,
+             "cash_yield": 0.02}
     fields = [f.name for f in dataclasses.fields(pc.Procedure)]
     assert set(other) == set(fields), "给新字段补一个不同的取值"
     base = pc.composite(dev, pc.PLAN3D)
@@ -224,3 +225,49 @@ def test_blend_option_is_validated():
     with pytest.raises(ValueError, match="blend"):
         pc.PLAN3D.replace(blend="max")
     assert pc.Procedure.from_dict(pc.PLAN3D.replace(blend="rank").to_dict()).blend == "rank"
+
+
+# ---------- 估值 + 趋势仓位接进流程（DECISIONS 2026-11-13） ----------
+
+def _signals(dev, valuation=0.5, trend=1.0):
+    months = pd.date_range("2017-06-30", "2020-01-31", freq="ME")
+    return pd.DataFrame({"valuation": valuation, "trend": trend}, index=months)
+
+
+def test_overlay_fields_and_rules():
+    p = pc.PLAN3D.replace(overlay="value_trend", cash_yield=0.02)
+    assert (p.overlay_low, p.overlay_high) == (0.25, 0.75)
+    r = pc.rules(p)
+    assert r.slot_budget == pytest.approx(0.75 / 15) and r.cash_yield == 0.02
+    assert pc.rules(pc.PLAN3D).slot_budget is None and pc.rules(pc.PLAN3D).cash_yield == 0.0
+    with pytest.raises(ValueError, match="overlay"):
+        pc.PLAN3D.replace(overlay="vol")
+    assert pc.Procedure.from_dict(p.to_dict()) == p
+
+
+def test_overlay_sets_the_number_of_holdings():
+    dev, _ = dev3d()
+    for valuation, trend, slots in ((1.0, 1.0, 15), (0.4, 1.0, 12), (0.0, 0.0, 5)):
+        dev["overlay_signals"] = _signals(dev, valuation, trend)
+        res = pc.run(dev, pc.PLAN3D.replace(overlay="value_trend"))
+        held = res.daily["n_holdings"].iloc[25:]
+        assert held.max() == slots and held.median() == slots, (valuation, trend)
+        assert res.trades.query("side == 'buy'")["value"].max() <= res.daily["nav"].max() * 0.05 + 1
+    no = pc.run(dev, pc.PLAN3D)
+    assert no.daily["n_holdings"].iloc[25:].median() == 15
+
+
+def test_overlay_runs_without_signals_injected_use_the_file(monkeypatch):
+    dev, _ = dev3d()
+    called = []
+    monkeypatch.setattr(pc.overlay, "load_monthly", lambda *a, **k: called.append(1) or pd.DataFrame(
+        {"ep": 0.05, "index": 100.0}, index=pd.date_range("2010-01-31", "2020-12-31", freq="ME")))
+    pc.run(dev, pc.PLAN3D.replace(overlay="value_trend"))
+    assert called
+
+
+def test_overlay_uses_the_procedures_own_range():
+    dev, _ = dev3d()
+    dev["overlay_signals"] = _signals(dev, 0.0, 0.0)                           # 最贵、趋势向下 → 下限
+    res = pc.run(dev, pc.PLAN3D.replace(overlay="value_trend", overlay_low=0.10, overlay_high=0.90))
+    assert res.daily["n_holdings"].iloc[25:].median() == 2                     # round(15 × 0.10 ÷ 0.90) = 2

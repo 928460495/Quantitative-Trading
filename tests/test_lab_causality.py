@@ -143,3 +143,25 @@ def test_current_baseline_ignores_the_future_at_every_start(offset):
     np.testing.assert_allclose(a.score[:k], b.score[:k], rtol=0, atol=1e-12)
     ra, rb = pc.run(dev, CURRENT, offset), pc.run(fut, CURRENT, offset)
     pd.testing.assert_series_equal(ra.daily["nav"].iloc[:k], rb.daily["nav"].iloc[:k])
+
+
+@pytest.mark.parametrize("offset", [0, 5])
+def test_overlay_ignores_future_months_and_future_market_data(offset):
+    # 估值 + 趋势仓位：把某天之后的月度信号和行情全改掉，之前的持股只数和净值都不能变
+    dev, _ = dev3d()
+    months = pd.date_range("2016-01-31", "2020-01-31", freq="ME")
+    rng = np.random.default_rng(1)
+    sig = pd.DataFrame({"valuation": rng.uniform(size=len(months)), "trend": (rng.uniform(size=len(months)) > 0.5) * 1.0},
+                       index=months)
+    dev["overlay_signals"] = sig
+    proc = CURRENT.replace(overlay="value_trend", cash_yield=0.02)
+    cut = 300
+    fut = _scramble_dev(dev, cut)
+    day = dev["close"].index[cut]
+    later = sig.copy()
+    later.loc[later.index >= day] = rng.uniform(size=(int((later.index >= day).sum()), 2)).round()
+    fut["overlay_signals"] = later
+    ra, rb = pc.run(dev, proc, offset), pc.run(fut, proc, offset)
+    k = cut - offset
+    pd.testing.assert_series_equal(ra.daily["nav"].iloc[:k], rb.daily["nav"].iloc[:k])
+    pd.testing.assert_series_equal(ra.daily["slot_limit"].iloc[:k], rb.daily["slot_limit"].iloc[:k])
