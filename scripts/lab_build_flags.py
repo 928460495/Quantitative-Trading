@@ -3,6 +3,7 @@
 用法（先跑过 scripts/build_pool.py；单进程，几分钟）：
     python scripts/lab_build_flags.py                 # 训练段和验证段
     QT_UNLOCK_TEST=1 python scripts/lab_build_flags.py test   # 封存段：只在用户批准的最终测试前
+    python scripts/lab_build_flags.py live                    # 纸面跟单的最新数据
 
     deduct_loss.parquet   扣非净利润滚动四季为负（按公告日对齐）
     neg_equity.parquet    股东权益不为正
@@ -53,9 +54,8 @@ def main() -> None:
     from qt.panel import load_fundamentals
     from run_plan3c_train import POOL_CACHE, latest_version
 
-    version = latest_version(POOL_CACHE)
     for seg in parse_segments(sys.argv[1] if len(sys.argv) > 1 else "both"):
-        seg_dir = version / seg
+        seg_dir = latest_version(POOL_CACHE, seg) / seg
         close = pd.read_parquet(seg_dir / "close.parquet")
         can_buy = pd.read_parquet(seg_dir / "can_buy.parquet")
         print(f"== {seg}：{close.index[0].date()} ~ {close.index[-1].date()}，{close.shape[1]} 只", flush=True)

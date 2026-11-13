@@ -142,8 +142,9 @@ def run(train: dict, pool: pd.DataFrame, out_dir: Path, cache_dir: Path, log_pat
     return 0
 
 
-def latest_version(root: Path) -> Path:
-    dirs = sorted(d for d in root.iterdir() if (d / "train" / "meta.json").exists())
+def latest_version(root: Path, seg: str = "train") -> Path:
+    """有 seg 段缓存的最新数据版本目录（开发段看 train；纸面跟单看 live，可能在更新的版本目录下）。"""
+    dirs = sorted(d for d in root.iterdir() if (d / seg / "meta.json").exists())
     if not dirs:
         raise FileNotFoundError(f"{root} 下没有缓存，先跑 scripts/build_pool.py")
     return dirs[-1]

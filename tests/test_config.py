@@ -73,3 +73,27 @@ def test_parse_segments(monkeypatch):
         parse_segments("all")
     monkeypatch.setenv("QT_UNLOCK_TEST", "1")
     assert parse_segments("test") == ["test"]
+
+
+def test_spent_test_segment_allows_reading_after_2022(monkeypatch):
+    import qt.config as cfg
+    monkeypatch.setattr(cfg, "TEST_SEGMENT_SPENT", True)
+    cfg.check_range("2022-01-01", "2026-11-01")
+    assert cfg.segment("live")[0] == "2026-10-26"
+    assert cfg.parse_segments("live") == ["live"]
+
+
+def test_live_segment_locked_until_spent():
+    from qt.config import segment
+    with pytest.raises(TestSegmentLockedError):
+        segment("live")
+
+
+def test_latest_data_date_is_earlier_of_two_sources(tmp_path):
+    from qt.config import latest_data_date
+    (tmp_path / "q" / "calendars").mkdir(parents=True)
+    (tmp_path / "q" / "calendars" / "day.txt").write_text("2026-11-10\n2026-11-11\n2026-11-12\n")
+    (tmp_path / "f").mkdir()
+    pd.DataFrame({"instrument": ["SH600000"] * 2, "date": pd.to_datetime(["2026-11-10", "2026-11-11"]),
+                  "close": [1.0, 2.0]}).to_parquet(tmp_path / "f" / "daily.parquet")
+    assert latest_data_date(tmp_path / "q", tmp_path / "f") == "2026-11-11"

@@ -53,8 +53,8 @@ def lot_feasibility(raw_close: pd.DataFrame, can_buy: pd.DataFrame, nav: float, 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--segment", choices=["train", "valid", "test", "both"], default="both",
-                    help="test：封存段，只在用户批准的最终测试前用 QT_UNLOCK_TEST=1 生成")
+    ap.add_argument("--segment", choices=["train", "valid", "test", "live", "both"], default="both",
+                    help="test：封存段（最终测试用）；live：纸面跟单的最新数据")
     args = ap.parse_args()
 
     from qt.config import parse_segments, segment_range
