@@ -43,6 +43,7 @@ class AccountRules:
     # 仓位管理（DECISIONS 2026-11-13）：默认值保持旧行为
     slot_budget: float | None = None             # 每只买入金额不超过净值的这个比例；配合 exposure 按持股只数控制仓位
     cash_yield: float = 0.0                      # 现金的年化利息，每个交易日按 (1+y)^(1/252)−1 计入
+    dividend_tax: bool = False                   # 除权日按持有时间扣红利税（需要 MarketData.div_yield）
 
 
 @dataclass
@@ -58,6 +59,7 @@ class MarketData:
     can_sell: np.ndarray
     industry: np.ndarray | None = None
     force_exit: np.ndarray | None = None    # 信号日对齐：点名的持仓第二个交易日卖出，不等调仓日（框架 2.0）
+    div_yield: np.ndarray | None = None     # 除权日对齐：当天的现金分红比例（红利税用）
 
 
 def _wide(s: pd.Series, dates: pd.DatetimeIndex, instruments: pd.Index, fill, dtype) -> np.ndarray:
@@ -117,6 +119,7 @@ class _Account:
         self.cash = float(rules.cash)
         self.units: dict[int, float] = {}
         self.cost_price: dict[int, float] = {}
+        self.buy_day: dict[int, pd.Timestamp] = {}
         self.trades: list[tuple] = []
         self.cooldown_until: dict[int, int] = {}  # 止损卖出后，到这一天（含）为止不能买回
         self.day_cost = 0.0
@@ -137,6 +140,7 @@ class _Account:
         self.n_sells += 1
         self.trades.append((d.dates[i], d.instruments[col], "sell", round(value / raw), raw, value, cost, reason))
         del self.units[col], self.cost_price[col]
+        self.buy_day.pop(col, None)
 
     def buy(self, i: int, col: int, budget: float) -> float:
         """按预算买，付完成本现金不够就一手一手往下减。返回买入金额（0 表示没买）。"""
@@ -159,8 +163,20 @@ class _Account:
         self.n_buys += 1
         self.units[col] = value / adj
         self.cost_price[col] = adj
+        self.buy_day[col] = d.dates[i]
         self.trades.append((d.dates[i], code, "buy", shares, raw, value, cost, "buy"))
         return value
+
+
+def dividend_tax_rate(held_days: int, date: pd.Timestamp) -> float:
+    """红利税率（个人投资者）：2015-09-08 起 ≤30 天 20%、≤1 年 10%、>1 年 0；2013 年起 >1 年 5%；2013 年以前一律 10%。"""
+    if date < pd.Timestamp("2013-01-01"):
+        return 0.10
+    if held_days <= 30:
+        return 0.20
+    if held_days <= 365:
+        return 0.10
+    return 0.0 if date >= pd.Timestamp("2015-09-08") else 0.05
 
 
 def buy_budget(cash: float, empty: int, nav: float, n_hold: int, max_weight: float, fraction: float = 1.0) -> float:
@@ -224,11 +240,20 @@ def run_account(data: MarketData, rules: AccountRules = AccountRules(), exposure
     shadow = None if tiers is None else run_account(data, replace(rules, drawdown_tiers=None), exposure).daily["nav"].to_numpy()
     navs = [acct.cash]
     peak, halted, seen_out = acct.cash, False, False
-    rows = [(data.dates[0], acct.cash, acct.cash, 0.0, 0, rules.n_hold, 0.0, 0, 0)]
+    rows = [(data.dates[0], acct.cash, acct.cash, 0.0, 0, rules.n_hold, 0.0, 0, 0, 0.0)]
 
     for i in range(1, len(data.dates)):
         s = i - 1
         acct.day_cost, acct.n_buys, acct.n_sells = 0.0, 0, 0
+        day_tax = 0.0
+        if rules.dividend_tax and data.div_yield is not None:             # 除权日：前一天收盘还持有的才分红
+            for col in acct.units:
+                d = data.div_yield[i, col]
+                if d > 0:
+                    held = (data.dates[i] - acct.buy_day[col]).days
+                    tax = acct.units[col] * marks[s, col] * d * dividend_tax_rate(held, data.dates[i])
+                    acct.cash -= tax
+                    day_tax += tax
         ranks = _ranks(data.score[s])
         tradable_today = ~np.isnan(data.adj_close[i]) & ~np.isnan(data.raw_close[i])
 
@@ -313,10 +338,10 @@ def run_account(data: MarketData, rules: AccountRules = AccountRules(), exposure
         stock_value = sum(acct.value_of(c, marks[i]) for c in acct.units)
         navs.append(acct.cash + stock_value)
         rows.append((data.dates[i], acct.cash + stock_value, acct.cash, stock_value, len(acct.units), slot_limit,
-                     acct.day_cost, acct.n_buys, acct.n_sells))
+                     acct.day_cost, acct.n_buys, acct.n_sells, day_tax))
 
     daily = pd.DataFrame(rows, columns=["date", "nav", "cash", "stock_value", "n_holdings", "slot_limit", "cost",
-                                        "n_buys", "n_sells"]).set_index("date")
+                                        "n_buys", "n_sells", "tax"]).set_index("date")
     return AccountResult(daily=daily, trades=pd.DataFrame(acct.trades, columns=_TRADE_COLUMNS))
 
 

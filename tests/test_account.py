@@ -554,3 +554,58 @@ def test_slot_budget_is_a_share_of_net_value_not_of_remaining_cash():
     later = res.trades[(res.trades["side"] == "buy") & (res.trades["date"] > idx[1])]
     assert len(later) == 2
     assert (later["value"] >= 14_000).all() and (later["value"] <= 15_000).all()   # 净值的 15%（按一手 1000 元取整），不是剩余现金（约 7 万）的 15%
+
+
+# ---------- 红利税（DECISIONS 2026-11-13） ----------
+
+def test_dividend_tax_rate_by_holding_period_and_date():
+    from qt.account import dividend_tax_rate
+    d = pd.Timestamp
+    assert dividend_tax_rate(30, d("2020-06-01")) == 0.20 and dividend_tax_rate(31, d("2020-06-01")) == 0.10
+    assert dividend_tax_rate(365, d("2020-06-01")) == 0.10 and dividend_tax_rate(366, d("2020-06-01")) == 0.0
+    assert dividend_tax_rate(400, d("2015-09-07")) == 0.05 and dividend_tax_rate(400, d("2015-09-08")) == 0.0
+    assert dividend_tax_rate(5, d("2012-12-31")) == 0.10 and dividend_tax_rate(5, d("2013-01-04")) == 0.20
+
+
+def test_dividend_tax_is_taken_from_cash_on_the_ex_date():
+    import dataclasses
+    idx, cols, data = _flat_data(n_days=60, n_stocks=6)
+    div = np.zeros(data.score.shape)
+    div[40, 0] = 0.05                                                          # 第 40 天第一只股票分红 5%
+    data = dataclasses.replace(data, div_yield=div)
+    rules = _plain(slot_budget=0.25, dividend_tax=True)
+    res = run_account(data, rules, pd.Series(1.0, index=idx))
+    held = res.trades.query("side == 'buy' and instrument == @cols[0]")
+    assert len(held) == 1
+    value = held["value"].iloc[0]                                              # 股价不变，持仓价值不变
+    days = (idx[40] - held["date"].iloc[0]).days
+    want = value * 0.05 * (0.10 if days > 30 else 0.20)
+    assert res.daily["tax"].iloc[40] == pytest.approx(want)
+    assert res.daily["tax"].drop(index=idx[40]).sum() == 0
+    assert res.daily["nav"].iloc[40] == pytest.approx(res.daily["nav"].iloc[39] - want)
+    assert (res.daily["cost"].iloc[40] == 0)                                   # 税不算交易成本
+    off = run_account(data, _plain(slot_budget=0.25), pd.Series(1.0, index=idx))
+    assert off.daily["tax"].sum() == 0                                         # 默认不扣
+
+
+def test_dividend_tax_ignores_stocks_not_held():
+    import dataclasses
+    idx, cols, data = _flat_data(n_days=60, n_stocks=6)
+    div = np.zeros(data.score.shape)
+    div[40, 5] = 0.05                                                          # 排最后的那只，没买
+    res = run_account(dataclasses.replace(data, div_yield=div), _plain(slot_budget=0.25, dividend_tax=True),
+                      pd.Series(1.0, index=idx))
+    assert res.daily["tax"].sum() == 0
+
+
+def test_dividend_tax_counts_days_from_the_actual_purchase():
+    import dataclasses
+    idx, cols, data = _flat_data(n_days=60, n_stocks=6)
+    exposure = pd.Series(0.5, index=idx)
+    exposure.iloc[20:] = 1.0                                                   # 第 21 个交易日才买进第 3、4 只
+    div = np.zeros(data.score.shape)
+    div[30, 2] = 0.05                                                          # 第 3 只在买入后 9 个交易日除权
+    res = run_account(dataclasses.replace(data, div_yield=div), _plain(slot_budget=0.25, dividend_tax=True), exposure)
+    bought = res.trades.query("side == 'buy' and instrument == @cols[2]")
+    assert bought["date"].iloc[0] == idx[21]
+    assert res.daily["tax"].iloc[30] == pytest.approx(bought["value"].iloc[0] * 0.05 * 0.20)   # 不到 30 天：20%
