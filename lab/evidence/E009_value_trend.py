@@ -1,6 +1,6 @@
 """E009：估值 + 趋势仓位的检验（规则见 docs/DECISIONS.md 2026-11-13「估值 + 趋势仓位的检验」，运行前写定）。
 
-在仓库根目录运行：python lab/evidence/E009_value_trend.py
+在仓库根目录运行：python lab/evidence/E009_value_trend.py [下限 上限]（默认 0.25 0.75）
 上证月度文件里 2022 年以后的行（封存段）读进来就丢掉，不看、不打印。
 """
 
@@ -20,6 +20,8 @@ from E004_mix import CASH_YIELD, DAYS, TRADE_COST, stats  # noqa: E402
 from E007_valuation_oos import LAST, PE_FILE, REPORT, TEST, daily_pct, equity_returns, monthly_pct  # noqa: E402
 
 MA_MONTHS, EVERY, BAND = 10, 20, 0.10
+LOW, HIGH = (float(x) for x in (sys.argv[1:3] if len(sys.argv) == 3 else ("0.25", "0.75")))   # 股票比例的下限、上限
+SPAN = HIGH - LOW
 
 
 def monthly_trend() -> pd.Series:
@@ -55,8 +57,8 @@ def main() -> None:
     r = equity_returns()
     val = daily_pct(monthly_pct(), r.index)
     trend = daily_pct(monthly_trend(), r.index)                             # 同样"严格早于当天的最近一个月"
-    targets = {"估值 + 趋势": 0.25 + 0.50 * (0.5 * val + 0.5 * trend), "只看趋势（只报告）": 0.25 + 0.50 * trend,
-               "只看估值（E007，只报告）": 0.25 + 0.50 * val}
+    targets = {"估值 + 趋势": LOW + SPAN * (0.5 * val + 0.5 * trend), "只看趋势（只报告）": LOW + SPAN * trend,
+               "只看估值（只报告）": LOW + SPAN * val}
     rows, yearly, verdict = {}, {}, {}
     for seg, (a, b) in (("2005–2009", TEST), ("2010–2021", REPORT)):
         rr = r.loc[a:b]
@@ -80,14 +82,15 @@ def main() -> None:
     table = pd.DataFrame(rows).T
     passed = all(verdict.values())
     text = "\n".join([
-        "# E009：估值 + 趋势仓位的检验", "",
+        f"# E009：估值 + 趋势仓位的检验（股票比例 {LOW:.0%}–{HIGH:.0%}）", "",
         "规则见 `docs/DECISIONS.md` 2026-11-13「估值 + 趋势仓位的检验」（运行前写定）。两段数据都已看过，不是干净的检验。", "",
         f"**结论：{'通过' if passed else '不通过'}**（两段都要年化高于同比例固定、并且最大回撤更浅）："
         + "、".join(f"{k} {'满足' if v else '不满足'}" for k, v in verdict.items()), "",
         table.to_markdown(floatfmt=".4f"), "",
         "## 分年：2005–2009", "", yearly["2005–2009"].to_markdown(floatfmt=".4f"), "",
         "## 分年：2010–2021", "", yearly["2010–2021"].to_markdown(floatfmt=".4f"), ""])
-    (ROOT / "lab" / "evidence" / "E009.md").write_text(text, encoding="utf-8")
+    tag = "" if (LOW, HIGH) == (0.25, 0.75) else f"_{LOW:.0%}-{HIGH:.0%}".replace("%", "")
+    (ROOT / "lab" / "evidence" / f"E009{tag}.md").write_text(text, encoding="utf-8")
     print(text)
 
 
