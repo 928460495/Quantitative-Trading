@@ -7,16 +7,19 @@
 from __future__ import annotations
 
 import dataclasses
+import operator
 from dataclasses import dataclass
+from functools import reduce
 
 import pandas as pd
 
 from qt.account import AccountResult, AccountRules, MarketData, run_account
-from qt.composite import neutral_composite
+from qt.composite import category_scores, composite as blend, neutral_composite
 from qt.plan3d import GROUPS
-from qt.wide_eval import _market_data
+from qt.wide_eval import _market_data, neutralize, zscore
 
 MAX_STOCK_WEIGHT, MAX_INDUSTRY_WEIGHT, MIN_TRADE, COOLDOWN_DAYS = 0.20, 0.30, 2000.0, 20
+MISSING = ("skip", "zero")
 
 
 @dataclass(frozen=True)
@@ -30,12 +33,15 @@ class Procedure:
     exit_next_day: bool = False                                  # exclude 命中的持仓：False 下个调仓日卖，True 第二个交易日卖
     stop_loss: float | None = None
     cost_multiplier: float = 1.0
+    missing: str = "skip"                                       # 某组分数缺失：skip 只平均有的组；zero 按 0（截面平均）计入
 
     def __post_init__(self):
         # 规范写法：族按名字排、排除名单去重排序。这样写进文件再读回来、或者字典顺序不同，都还是同一个流程
         object.__setattr__(self, "families", tuple(sorted((n, tuple(fs)) for n, fs in self.families)))
         object.__setattr__(self, "exclude", tuple(sorted(set(self.exclude))))
         object.__setattr__(self, "no_buy", tuple(sorted(set(self.no_buy))))
+        if self.missing not in MISSING:
+            raise ValueError(f"missing 只能是 {MISSING}：{self.missing}")
 
     def factors(self) -> tuple[str, ...]:
         return tuple(f for _, fs in self.families for f in fs)
@@ -67,8 +73,15 @@ PLAN3D = Procedure(families=tuple(GROUPS.items()))               # 计划 3d 的
 
 
 def composite(dev: dict, proc: Procedure) -> pd.DataFrame:
+    """族内等权 → 每族标准化 → 族间等权 → 对行业和市值中性化 → 标准化。"""
     group_of = {f: name for name, fs in proc.families for f in fs}
-    return neutral_composite({f: dev["factors"][f] for f in group_of}, group_of, dev["industry"], dev["log_mcap"])
+    scores = {f: dev["factors"][f] for f in group_of}
+    if proc.missing == "skip":
+        return neutral_composite(scores, group_of, dev["industry"], dev["log_mcap"])
+    cats = category_scores(scores, group_of)
+    present = reduce(operator.or_, [c.notna() for c in cats.values()])
+    cats = {g: c.fillna(0.0).where(present) for g, c in cats.items()}       # 至少有一组的股票：缺的组记 0
+    return zscore(neutralize(blend(cats), dev["industry"], dev["log_mcap"], size=True))
 
 
 def _any(dev: dict, names: tuple[str, ...], like: pd.DataFrame) -> pd.DataFrame:

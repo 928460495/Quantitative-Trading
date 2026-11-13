@@ -86,8 +86,8 @@ def _scramble_dev(dev: dict, cut: int) -> dict:
 
 
 @pytest.mark.parametrize("proc", [pc.PLAN3D, pc.PLAN3D.replace(exit_next_day=True, exclude=["is_st", "deduct_loss", "cheap"]),
-                                  pc.PLAN3D.replace(no_buy=["high_vol", "small30"])],
-                         ids=["基线", "次日卖出", "不买小市值"])
+                                  pc.PLAN3D.replace(no_buy=["high_vol", "small30"]), pc.PLAN3D.replace(missing="zero")],
+                         ids=["基线", "次日卖出", "不买小市值", "缺失记零"])
 def test_signals_and_account_up_to_a_day_ignore_everything_after_it(proc):
     dev, _ = dev3d()
     cut = 300

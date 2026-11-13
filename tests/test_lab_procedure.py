@@ -103,3 +103,49 @@ def test_rules_follow_the_procedure():
     assert (r.n_hold, r.sell_rank, r.rebalance_every, r.cost_multiplier, r.stop_loss) == (30, 60, 10, 2.0, 0.2)
     assert r.drawdown_stop is None and r.drawdown_tiers is None and r.min_trade == 2000.0
     assert (r.max_stock_weight, r.max_industry_weight) == (0.20, 0.30)
+
+
+# ---------- 某一组分数缺失时怎么处理（H001） ----------
+
+def test_missing_family_skip_is_the_old_behaviour_and_zero_counts_it_as_average():
+    dev, _ = dev3d()
+    cols = dev["close"].columns
+    assert pc.PLAN3D.missing == "skip"
+    dev["factors"]["sue"] = dev["factors"]["sue"].copy()
+    dev["factors"]["sue"][cols[:10]] = np.nan                                 # 前 10 只没有"业绩超预期"
+    skip = pc.composite(dev, pc.PLAN3D)
+    zero = pc.composite(dev, pc.PLAN3D.replace(missing="zero"))
+    from qt.composite import neutral_composite
+    group_of = {f: g for g, fs in pc.PLAN3D.families for f in fs}
+    want = neutral_composite({f: dev["factors"][f] for f in group_of}, group_of, dev["industry"], dev["log_mcap"])
+    pd.testing.assert_frame_equal(skip, want)                                 # skip 和以前完全一样
+    assert zero.notna().equals(skip.notna())                                  # 有没有总分不变
+    # 缺一组的股票：skip 时按其余三组平均，zero 时这一组记 0 → 四组平均，分数向 0 收
+    from qt.composite import category_scores
+    cats = category_scores({f: dev["factors"][f] for f in group_of}, group_of)
+    d = dev["close"].index[100]
+    others = np.mean([cats[g].loc[d, cols[0]] for g in cats if g != "业绩超预期"])
+    raw_zero = sum(cats[g].loc[d, cols[0]] for g in cats if g != "业绩超预期") / 4
+    assert raw_zero == pytest.approx(others * 3 / 4)
+    full = [c for c in cols[10:]]
+    assert np.corrcoef(skip.loc[:, full].stack(), zero.loc[:, full].stack())[0, 1] > 0.98   # 数据齐的股票几乎不受影响
+    miss = list(cols[:10])
+    shrink = zero[miss].abs().mean().mean() / skip[miss].abs().mean().mean()
+    assert 0.6 < shrink < 0.9                                                 # 缺一组的股票分数向 0 收（约 3/4）
+
+
+def test_missing_zero_still_needs_at_least_one_family():
+    dev, _ = dev3d()
+    col = dev["close"].columns[3]
+    for f in pc.PLAN3D.factors():
+        dev["factors"][f] = dev["factors"][f].copy()
+        dev["factors"][f][col] = np.nan                                       # 一组都没有
+    zero = pc.composite(dev, pc.PLAN3D.replace(missing="zero"))
+    assert zero[col].isna().all()
+
+
+def test_missing_option_is_validated_and_round_trips():
+    p = pc.PLAN3D.replace(missing="zero")
+    assert pc.Procedure.from_dict(p.to_dict()) == p and p != pc.PLAN3D
+    with pytest.raises(ValueError, match="missing"):
+        pc.PLAN3D.replace(missing="median")
