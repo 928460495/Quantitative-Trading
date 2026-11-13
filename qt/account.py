@@ -40,6 +40,9 @@ class AccountRules:
     drawdown_tiers: tuple | None = None          # 按回撤分档减仓（qt.drawdown.DEFAULT_TIERS）；和 drawdown_stop 二选一
     tier_window: int = 250
     tier_buffer: float = 0.02
+    # 仓位管理（DECISIONS 2026-11-13）：默认值保持旧行为
+    slot_budget: float | None = None             # 每只买入金额不超过净值的这个比例；配合 exposure 按持股只数控制仓位
+    cash_yield: float = 0.0                      # 现金的年化利息，每个交易日按 (1+y)^(1/252)−1 计入
 
 
 @dataclass
@@ -274,6 +277,8 @@ def run_account(data: MarketData, rules: AccountRules = AccountRules(), exposure
         if empty > 0:
             nav = acct.cash + sum(acct.value_of(c, marks[i]) for c in acct.units)
             budget = buy_budget(acct.cash, empty, nav, rules.n_hold, rules.max_stock_weight, fraction)
+            if rules.slot_budget is not None:
+                budget = min(budget, nav * rules.slot_budget)
             if budget < rules.min_trade:
                 empty = 0
             industry_value: dict[object, float] = {}
@@ -302,7 +307,9 @@ def run_account(data: MarketData, rules: AccountRules = AccountRules(), exposure
                     if ind is not None:
                         industry_value[ind] = industry_value.get(ind, 0.0) + value
 
-        # 3. 记账
+        # 3. 记账：现金利息先计入（不算成本）
+        if rules.cash_yield:
+            acct.cash *= (1 + rules.cash_yield) ** (1 / TRADING_DAYS)
         stock_value = sum(acct.value_of(c, marks[i]) for c in acct.units)
         navs.append(acct.cash + stock_value)
         rows.append((data.dates[i], acct.cash + stock_value, acct.cash, stock_value, len(acct.units), slot_limit,

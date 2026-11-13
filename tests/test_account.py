@@ -500,3 +500,57 @@ def test_no_force_exit_matrix_means_old_behaviour():
     rules = AccountRules(n_hold=2, sell_rank=3, stop_loss=None, drawdown_stop=None, rebalance_every=20,
                          max_stock_weight=1.0, max_industry_weight=1.0)
     assert run_account(data, rules).trades.query("side == 'sell'").empty
+
+
+# ---------- 仓位管理要用的：每只金额上限、现金利息（DECISIONS 2026-11-13） ----------
+
+def _flat_data(n_days=30, n_stocks=6, price=10.0):
+    from qt.wide_eval import _market_data
+    idx = pd.bdate_range("2020-01-01", periods=n_days)
+    cols = [f"SH60000{i}" for i in range(n_stocks)]
+    close = pd.DataFrame(price, index=idx, columns=cols)
+    score = pd.DataFrame([list(range(n_stocks, 0, -1))] * n_days, index=idx, columns=cols, dtype=float)
+    true = pd.DataFrame(True, index=idx, columns=cols)
+    return idx, cols, _market_data(score, close, close, true, true, None)
+
+
+def _plain(**kw):
+    return AccountRules(**{"n_hold": 4, "sell_rank": 6, "stop_loss": None, "drawdown_stop": None, "rebalance_every": 20,
+                           "max_stock_weight": 1.0, "max_industry_weight": 1.0, **kw})
+
+
+def test_slot_budget_caps_each_purchase_and_leaves_cash():
+    idx, cols, data = _flat_data()
+    exposure = pd.Series(0.5, index=idx)                                       # 4 × 0.5 = 2 只
+    res = run_account(data, _plain(slot_budget=0.05), exposure)
+    buys = res.trades[res.trades["side"] == "buy"]
+    assert len(buys) == 2 and (buys["value"] <= 5_000).all() and (buys["value"] >= 4_900).all()
+    assert res.daily["cash"].iloc[-1] > 89_000                                 # 其余都是现金
+    free = run_account(data, _plain(), exposure)                               # 不设上限：两只平分全部现金
+    assert free.trades.query("side == 'buy'")["value"].min() > 45_000
+
+
+def test_cash_yield_accrues_daily_on_idle_cash():
+    idx, cols, data = _flat_data(n_days=253)
+    rules = _plain(slot_budget=0.05, cash_yield=0.02)
+    res = run_account(data, rules, pd.Series(0.0, index=idx))                  # 一只都不买，全是现金
+    assert res.trades.empty
+    nav = res.daily["nav"]
+    assert nav.iloc[-1] / nav.iloc[0] == pytest.approx(1.02, rel=1e-9)        # 252 个交易日正好一年
+    assert run_account(data, _plain(), pd.Series(0.0, index=idx)).daily["nav"].iloc[-1] == 100_000   # 默认不计息
+    assert (res.daily["cost"] == 0).all()                                      # 利息不算进成本
+
+
+def test_defaults_keep_the_old_behaviour():
+    r = AccountRules()
+    assert r.slot_budget is None and r.cash_yield == 0.0
+
+
+def test_slot_budget_is_a_share_of_net_value_not_of_remaining_cash():
+    idx, cols, data = _flat_data(n_days=45)
+    exposure = pd.Series(0.5, index=idx)
+    exposure.iloc[20:] = 1.0                                                   # 第 20 个信号日起放到 4 只
+    res = run_account(data, _plain(slot_budget=0.30), exposure)
+    later = res.trades[(res.trades["side"] == "buy") & (res.trades["date"] > idx[1])]
+    assert len(later) == 2
+    assert (later["value"] >= 29_900).all() and (later["value"] <= 30_000).all()   # 净值的 30%，不是剩余现金（约 4 万）的 30%
