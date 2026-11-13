@@ -100,3 +100,15 @@ git push
 - 中途检查段已看过四次并做过诊断，不能再当检验用；测试段仍封存。**下一步等用户决定**（我的建议：把 2019–2021 并入研究数据，下一版不拿最极端的十几只、加问题股排除，用逐年滚动的办法检验，测试段仍只跑一次）
 - 本机运行方式变了：工作目录里 `data/cache` 是指向 `~/qt-full-a/data/cache` 的链接（已在本地排除，不进仓库），脚本可以直接在工作目录跑；新增 `scripts/build_plan3d_flags.py`（ST、亏损小营收标记）、`scripts/run_plan3d.py`
 - 交易规则更新（2026-07-06 起）：主板 ST 涨跌幅 5% → 10%（`qt/limits.py` 已改）；全部 A 股可做盘后固定价格交易
+
+## 七、研究框架第 2 版和研究实验室（2026-11-12 起，现行）
+
+**先读 `docs/FRAMEWORK.md`**。以前各节里的"下一步"都已作废，按下面做。
+
+- 2026-11-12 用户要求系统学习文献后重整框架、自进化式研究，并把代码库交给 Claude 负责。文献调研笔记在 `docs/research/research_notes/量化研究框架文献综述/`，综述在 `docs/research/2026-11-12-literature-review.md`
+- 框架 2.0 要点：开发段合并为 2010–2021（分三个制度阶段报告）；研究对象是"流程"；一圈只改一处、先登记假设卡再运行；采纳与否由 `qt/lab/gates.py` 按冻结的规则算出；每张卡最多 6 次、每世代最多 12 张卡；封存段（2022 起）的通过标准不变，要用户批准才跑
+- 实验室代码：`qt/lab/`（protocol、store、procedure、scorecard、gates、evidence、cards），脚本 `scripts/lab_run.py`（跑一张卡）、`scripts/lab_evidence.py`（便宜证据）、`scripts/lab_build_flags.py`（扣非为负、净资产不为正两张标记）。记录都在 `lab/`：`baseline.yaml`（现行基线和历史）、`cards/`、`runs.jsonl`、`reports/`、`evidence/`、`BELIEFS.md`
+- 一圈怎么跑：写 `lab/cards/Hnnn.yaml` → 提交 → `python scripts/lab_run.py Hnnn`（约 15 分钟）→ 看 `lab/reports/Hnnn-rk.md` → 采纳就改 `lab/baseline.yaml`（history 加一行）和卡片 status/result → 更新 `lab/BELIEFS.md` → 提交
+- 进度（2026-11-13）：H001（缺失的组按 0 计入）采纳；H002（去掉"跌得多"）采纳；H003（"业绩超预期"扩成"盈利改善"）运行中。现行基线：盈利改善（sue）、便宜、冷门三组等权，15 只，每 20 天调仓
+- H001 第 1 次运行因程序错误作废（缓存钥匙漏字段，候选拿到基线的合成分）；已修并加了结构性测试（失效模式 F9）
+- **提交署名**：`CLAUDE.md` 规定提交里不写模型名称，署名用 `Co-Authored-By: Claude <noreply@anthropic.com>`。2026-11-12 至 13 有 5 个已推送的提交误带了模型名（06c9717、0771876、1dbdd5b、2c8d282、886db17），改写需要强制推送，等用户决定
