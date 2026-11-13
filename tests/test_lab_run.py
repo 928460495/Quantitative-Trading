@@ -46,7 +46,8 @@ def test_run_card_writes_report_runs_and_trials(tmp_path):
     r = runs[0]
     assert r["adopt"] is False                                                 # 去掉带信号的组：收益型规则不会通过
     assert r["diff"]["全段"] < 0 and r["t"] < -2 and "配对差值的 t 值" in r["failed"]
-    assert r["candidate"]["families"] == DROP_CHEAP["variant"]["families"] and r["framework"] == "2.0"
+    from qt.lab.protocol import FRAMEWORK_VERSION
+    assert r["candidate"]["families"] == DROP_CHEAP["variant"]["families"] and r["framework"] == FRAMEWORK_VERSION
     assert r["baseline"] == lr.proc_hash(pc.PLAN3D)
     text = (lab / "reports" / "H001-r1.md").read_text()
     for word in ("不采纳", "规则逐条", "配对比较", "成绩单：候选", "成绩单：基线", "最顶端各档", "纯噪声", "不算干净的证据"):

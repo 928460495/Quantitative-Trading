@@ -7,7 +7,7 @@ from statistics import NormalDist
 import numpy as np
 import pandas as pd
 
-FRAMEWORK_VERSION = "2.0"
+FRAMEWORK_VERSION = "2.1"
 
 # 数据：开发段和三个制度阶段（第 2 节）。封存段 2022-01-01 起，不在这里出现
 DEV = ("2010-01-01", "2021-12-31")
@@ -20,6 +20,7 @@ OFFSETS = (0, 5, 10, 15)      # 四个错开的调仓起点（交易日）
 BENCH_EVERY = 20              # 能持有等权每 20 个交易日调一次
 NW_LAG = 20                   # 配对差值的 Newey-West 滞后
 BIG_LOSS = -0.40              # 平仓时亏损超过它算"大亏"
+RISK_FREE = 0.02              # 夏普比率的无风险收益（年化，和现金利息相同；框架 2.1）
 
 # 采纳规则（第 6 节）
 T_ADOPT = 2.0                 # 收益型：配对差值 t 值下限

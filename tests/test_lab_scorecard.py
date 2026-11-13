@@ -290,3 +290,71 @@ def test_flag_split_in_top_bucket():
     assert row["顶端带标记的比例"] == pytest.approx(0.26, abs=0.02)            # 前 50 名里 13 只
     assert row["带标记的20天收益"] < row["不带标记的20天收益"]
     assert row["带标记的跌超20%比例"] > row["不带标记的跌超20%比例"]
+
+
+# ---------- 夏普和补充指标（框架 2.1；DECISIONS 2026-11-13） ----------
+
+def test_sharpe_is_unchanged_by_mixing_with_cash_at_the_risk_free_rate():
+    from qt.lab.protocol import RISK_FREE
+    rng = np.random.default_rng(3)
+    r = pd.Series(rng.normal(0.0008, 0.015, 2000))
+    rf = (1 + RISK_FREE) ** (1 / 252) - 1
+    m = sc.risk_metrics(r, r * 0 + 0.0003, r * 0 + 0.0002)
+    half = sc.risk_metrics(0.5 * r + 0.5 * rf, r * 0 + 0.0003, r * 0 + 0.0002)
+    assert RISK_FREE == 0.02
+    assert half["夏普"] == pytest.approx(m["夏普"], rel=1e-9)
+    assert m["夏普"] == pytest.approx((r - rf).mean() / r.std() * np.sqrt(252))
+
+
+def test_information_ratio_alpha_and_m2_against_the_equal_weight_benchmark():
+    rng = np.random.default_rng(4)
+    ew = pd.Series(rng.normal(0.0005, 0.012, 3000))
+    active = pd.Series(rng.normal(0.0004, 0.005, 3000))
+    hs = pd.Series(rng.normal(0.0003, 0.013, 3000))
+    m = sc.risk_metrics(ew + active, ew, hs)
+    assert m["信息比率"] == pytest.approx(active.mean() / active.std() * np.sqrt(252))
+    assert m["主动风险"] == pytest.approx(active.std() * np.sqrt(252))
+    assert m["α的t值"] > 3                                                      # 每天稳定多 0.04%
+    ew_m = sc.risk_metrics(ew, ew, hs)
+    assert m["M²"] == pytest.approx((m["夏普"] - ew_m["夏普"]) * ew.std() * np.sqrt(252))
+    assert ew_m["信息比率"] != ew_m["信息比率"] or ew_m["信息比率"] == 0       # 和自己比没有主动收益
+    assert m["等权夏普"] == pytest.approx(ew_m["夏普"]) and m["沪深300夏普"] == pytest.approx(sc.risk_metrics(hs, ew, hs)["夏普"])
+
+
+def test_sortino_and_calmar():
+    from qt.lab.protocol import RISK_FREE
+    r = pd.Series([0.01, -0.02, 0.015, -0.005, 0.01] * 100)
+    rf = (1 + RISK_FREE) ** (1 / 252) - 1
+    m = sc.risk_metrics(r, r * 0, r * 0)
+    ex = r - rf
+    assert m["索提诺"] == pytest.approx(ex.mean() / np.sqrt((np.minimum(ex, 0) ** 2).mean()) * np.sqrt(252))
+    assert m["卡尔玛"] == pytest.approx(sc._annual(r) / -sc._max_drawdown(r))
+
+
+def test_scorecard_carries_sharpe_and_the_report_only_metrics():
+    dev, _ = dev3d()
+    card = sc.scorecard(dev, sc.run_phases(dev, pc.PLAN3D))
+    for col in ("夏普", "最差起点夏普差", "等权夏普", "沪深300夏普", "信息比率", "主动风险", "α的t值", "M²", "索提诺", "卡尔玛"):
+        assert col in card.columns, col
+    assert card.loc["全段", "夏普"] > card.loc["全段", "等权夏普"]               # 假数据里"便宜"组带真信号
+    assert card.loc["全段", "最差起点夏普差"] <= card.loc["全段", "夏普"] - card.loc["全段", "等权夏普"] + 1e-12
+
+
+def test_alpha_uses_the_estimated_beta():
+    from qt.lab.protocol import RISK_FREE
+    rng = np.random.default_rng(5)
+    rf = (1 + RISK_FREE) ** (1 / 252) - 1
+    ew = pd.Series(rng.normal(0.0005, 0.012, 3000))
+    r = 0.5 * ew + 0.5 * rf + pd.Series(rng.normal(0.0004, 0.004, 3000))     # 半个市场暴露，加稳定的 α
+    assert sc.risk_metrics(r, ew, ew)["α的t值"] > 3
+
+
+def test_worst_start_sharpe_gap_is_the_minimum_over_starts():
+    dev, _ = dev3d()
+    res = sc.run_phases(dev, pc.PLAN3D)
+    card = sc.scorecard(dev, res)
+    rets = sc.daily_returns(res)
+    hold, hs = sc.bench_returns(dev, res)
+    gaps = [sc.risk_metrics(rets[k], hold[k], hs)["夏普"] - sc.risk_metrics(rets[k], hold[k], hs)["等权夏普"] for k in rets]
+    assert card.loc["全段", "最差起点夏普差"] == pytest.approx(min(gaps))
+    assert card.loc["全段", "夏普"] == pytest.approx(np.mean([sc.risk_metrics(rets[k], hold[k], hs)["夏普"] for k in rets]))

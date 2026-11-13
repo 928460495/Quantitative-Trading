@@ -27,11 +27,11 @@ def test_neighbours_are_the_registered_six():
 
 
 def test_strong_signal_passes_every_check(tmp_path):
-    dev, _ = dev3d()
+    dev, _ = dev3d(n_stocks=150)                                              # 股票够多，持 20 只仍是精选
     log = tmp_path / "trials.jsonl"
     checks, versions = lr.readiness(dev, pc.PLAN3D, log=log)
-    assert list(checks.index) == ["2a 三个阶段都高于两个基准", "2b 四个起点各自高于能持有等权", "2c 成本翻倍后高于两个基准",
-                                  "3 邻近参数都高于能持有等权"]
+    assert list(checks.index) == ["2a 三个阶段的夏普都高于两个基准", "2b 四个起点各自的夏普高于能持有等权",
+                                  "2c 成本翻倍后夏普高于两个基准", "3 邻近参数的夏普都高于能持有等权"]
     assert checks["满足"].all(), checks
     assert set(versions) == {"基线", "成本翻倍", *lr.NEIGHBOURS}
     rows = [json.loads(x) for x in log.read_text().splitlines()]
@@ -55,16 +55,14 @@ def test_each_check_uses_the_right_numbers(monkeypatch):
     checks, versions = lr.readiness(dev, pc.PLAN3D)
     base = versions["基线"]
     eras = [e for e in base.index if e != "全段"]
-    want_2a = min(min(base.loc[e, "年化"] - base.loc[e, "能持有等权"], base.loc[e, "年化"] - base.loc[e, "沪深300全收益"]) for e in eras)
-    assert checks.loc["2a 三个阶段都高于两个基准", "最小余量"] == pytest.approx(want_2a)
-    assert checks.loc["2b 四个起点各自高于能持有等权", "最小余量"] == pytest.approx(base.loc["全段", "最差起点超额"])
+    gap = lambda card, row: min(card.loc[row, "夏普"] - card.loc[row, "等权夏普"], card.loc[row, "夏普"] - card.loc[row, "沪深300夏普"])
+    assert checks.loc["2a 三个阶段的夏普都高于两个基准", "最小余量"] == pytest.approx(min(gap(base, e) for e in eras))
+    assert checks.loc["2b 四个起点各自的夏普高于能持有等权", "最小余量"] == pytest.approx(base.loc["全段", "最差起点夏普差"])
     c2 = versions["成本翻倍"]
-    assert checks.loc["2c 成本翻倍后高于两个基准", "最小余量"] == pytest.approx(
-        min(c2.loc["全段", "年化"] - c2.loc["全段", "能持有等权"], c2.loc["全段", "年化"] - c2.loc["全段", "沪深300全收益"]))
+    assert checks.loc["2c 成本翻倍后夏普高于两个基准", "最小余量"] == pytest.approx(gap(c2, "全段"))
     assert c2.loc["全段", "年成本"] > base.loc["全段", "年成本"] * 1.8
-    assert checks.loc["3 邻近参数都高于能持有等权", "最小余量"] == pytest.approx(
-        min(versions[n].loc["全段", "超额"] for n in lr.NEIGHBOURS))
-    assert versions["持股 10 只"].loc["全段", "大亏只数"] >= 0
+    assert checks.loc["3 邻近参数的夏普都高于能持有等权", "最小余量"] == pytest.approx(
+        min(versions[n].loc["全段", "夏普"] - versions[n].loc["全段", "等权夏普"] for n in lr.NEIGHBOURS))
 
 
 def test_report_lists_checks_and_versions(tmp_path):
@@ -77,10 +75,10 @@ def test_report_lists_checks_and_versions(tmp_path):
 
 def test_hs300_counts_in_checks_2a_and_2c():
     import numpy as np
-    dev, _ = dev3d()
+    dev, _ = dev3d(n_stocks=150)
     n = len(dev["index"])
     dev["index"] = dev["index"].copy()
-    dev["index"]["H00300"] = 100 * 1.005 ** np.arange(n)                     # 沪深300 一年翻两倍多
+    dev["index"]["H00300"] = 100 * np.cumprod(1 + np.random.default_rng(2).normal(0.004, 0.001, n))   # 沪深300 稳涨、波动很小：夏普极高
     checks, _ = lr.readiness(dev, pc.PLAN3D)
-    assert checks["满足"].to_dict() == {"2a 三个阶段都高于两个基准": False, "2b 四个起点各自高于能持有等权": True,
-                                        "2c 成本翻倍后高于两个基准": False, "3 邻近参数都高于能持有等权": True}
+    assert checks["满足"].to_dict() == {"2a 三个阶段的夏普都高于两个基准": False, "2b 四个起点各自的夏普高于能持有等权": True,
+                                        "2c 成本翻倍后夏普高于两个基准": False, "3 邻近参数的夏普都高于能持有等权": True}

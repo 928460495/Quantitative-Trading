@@ -12,11 +12,13 @@ from qt.account import TRADING_DAYS, AccountResult
 from qt.diagnostics import BENCH, holdable_benchmark
 from qt.evaluate import newey_west_t
 from qt.lab import procedure as pc
-from qt.lab.protocol import BENCH_EVERY, BIG_LOSS, ERAS, FULL, NW_LAG, OFFSETS, era_of
+from qt.lab.protocol import BENCH_EVERY, BIG_LOSS, ERAS, FULL, NW_LAG, OFFSETS, RISK_FREE, era_of
 
 ROWS = [*ERAS, FULL]
 COLUMNS = ["年化", "能持有等权", "沪深300全收益", "超额", "最差起点超额", "最大回撤", "日均换手", "年成本",
-           "大亏只数", "最差五笔占比"]
+           "大亏只数", "最差五笔占比",
+           # 框架 2.1：夏普（扣 2% 无风险收益）是第 8 节的判定口径；其余只报告
+           "夏普", "最差起点夏普差", "等权夏普", "沪深300夏普", "信息比率", "主动风险", "α的t值", "M²", "索提诺", "卡尔玛"]
 CASH = 100_000
 
 
@@ -66,6 +68,29 @@ def _max_drawdown(r: pd.Series) -> float:
     return float((nav / np.maximum.accumulate(nav) - 1).min())
 
 
+def risk_metrics(r: pd.Series, ew: pd.Series, hs: pd.Series) -> dict:
+    """一段日收益的风险调整指标。ew = 同期能持有等权，hs = 沪深300 全收益（同一组日期）。
+
+    夏普 = (r − rf) 均值 ÷ r 标准差 × √252，rf 每年 RISK_FREE；信息比率、主动风险相对能持有等权；
+    α 的 t 值：(r − rf) 对 (ew − rf) 回归后的残差序列的 Newey-West t；M² = (夏普 − 等权夏普) × 等权年化波动。
+    """
+    rf = (1 + RISK_FREE) ** (1 / TRADING_DAYS) - 1
+    root = np.sqrt(TRADING_DAYS)
+    sharpe = lambda x: float((x - rf).mean() / x.std() * root) if x.std() > 0 else float("nan")
+    active = r.to_numpy() - ew.to_numpy()
+    a_sd = active.std(ddof=1)
+    ex, bx = r.to_numpy() - rf, ew.to_numpy() - rf
+    beta = float(np.cov(ex, bx, ddof=1)[0, 1] / bx.var(ddof=1)) if bx.var(ddof=1) > 0 else 0.0
+    down = np.sqrt(np.mean(np.minimum(ex, 0) ** 2))
+    dd = _max_drawdown(r)
+    s, s_ew = sharpe(r), sharpe(ew)
+    return {"夏普": s, "等权夏普": s_ew, "沪深300夏普": sharpe(hs),
+            "信息比率": float(active.mean() / a_sd * root) if a_sd > 0 else float("nan"), "主动风险": float(a_sd * root),
+            "α的t值": float(newey_west_t(pd.Series(ex - beta * bx), NW_LAG)),
+            "M²": float((s - s_ew) * ew.std() * root), "索提诺": float(ex.mean() / down * root) if down > 0 else float("nan"),
+            "卡尔玛": float(_annual(r) / -dd) if dd < 0 else float("nan")}
+
+
 def _slices(index: pd.DatetimeIndex) -> dict[str, np.ndarray]:
     era = era_of(index)
     return {**{name: era == name for name in ERAS}, FULL: np.ones(len(index), dtype=bool)}
@@ -92,7 +117,9 @@ def scorecard(dev: dict, results: dict[int, AccountResult]) -> pd.DataFrame:
             p = p[(p["sell_date"] >= dates[0]) & (p["sell_date"] <= dates[-1])]
             big += int((p["ret"] <= BIG_LOSS).sum())
             worst5.append(float(p["pnl"].nsmallest(5).clip(upper=0).sum() / CASH))
+        risk = pd.DataFrame({k: risk_metrics(rets.loc[dates, k], hold.loc[dates, k], hs.loc[dates]) for k in rets}).T
         rows[name] = {
+            **risk.mean().to_dict(), "最差起点夏普差": float((risk["夏普"] - risk["等权夏普"]).min()),
             "年化": float(ann.mean()), "能持有等权": float((ann - excess).mean()), "沪深300全收益": _annual(hs.loc[dates]),
             "超额": float(excess.mean()), "最差起点超额": float(excess.min()),
             "最大回撤": float(np.mean([_max_drawdown(rets.loc[dates, k]) for k in rets])),

@@ -6,7 +6,7 @@ from qt.lab import protocol as pr
 
 
 def test_frozen_values_match_framework_document():
-    assert pr.FRAMEWORK_VERSION == "2.0"
+    assert pr.FRAMEWORK_VERSION == "2.1" and pr.RISK_FREE == 0.02
     assert pr.DEV == ("2010-01-01", "2021-12-31")
     assert pr.ERAS == {"一": ("2010-01-01", "2014-12-31"), "二": ("2015-01-01", "2018-12-31"),
                        "三": ("2019-01-01", "2021-12-31")}
