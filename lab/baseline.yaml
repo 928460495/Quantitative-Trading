@@ -1,0 +1,41 @@
+# 现行基线流程（docs/FRAMEWORK.md 第 3 节）。只有采纳了一张卡才改它，改的时候在 history 里追加一行
+since: '2026-11-13'
+source: 计划 3d 的主方案（DECISIONS 2026-11-12）
+history:
+- date: '2026-11-13'
+  card: null
+  note: 第一个基线：计划 3d 主方案
+procedure:
+  families:
+    业绩超预期:
+    - sue
+    便宜:
+    - ep_deduct
+    - bp
+    - sp_ttm
+    冷门:
+    - turn_12m
+    - gtja100
+    - gtja081
+    - gtja132
+    跌得多:
+    - ret60
+    - ret120
+    - high52w
+    - lit_high52w
+    - a158_MA60
+    - a158_QTLU60
+    - a158_ROC60
+    - a158_MAX60
+  n_hold: 15
+  rebalance_every: 20
+  sell_mult: 3
+  exclude:
+  - cheap
+  - is_st
+  - loss_small
+  no_buy:
+  - high_vol
+  exit_next_day: false
+  stop_loss: null
+  cost_multiplier: 1.0

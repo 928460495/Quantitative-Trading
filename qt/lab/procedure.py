@@ -31,6 +31,12 @@ class Procedure:
     stop_loss: float | None = None
     cost_multiplier: float = 1.0
 
+    def __post_init__(self):
+        # 规范写法：族按名字排、排除名单去重排序。这样写进文件再读回来、或者字典顺序不同，都还是同一个流程
+        object.__setattr__(self, "families", tuple(sorted((n, tuple(fs)) for n, fs in self.families)))
+        object.__setattr__(self, "exclude", tuple(sorted(set(self.exclude))))
+        object.__setattr__(self, "no_buy", tuple(sorted(set(self.no_buy))))
+
     def factors(self) -> tuple[str, ...]:
         return tuple(f for _, fs in self.families for f in fs)
 

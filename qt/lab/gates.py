@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from qt.lab.protocol import BIG_LOSS_CUT, ERAS, FULL, LATEST_ERA, T_ADOPT, T_NOT_WORSE
+from qt.lab.protocol import BIG_LOSS_CUT, BIG_LOSS_SLACK, ERAS, FULL, LATEST_ERA, T_ADOPT, T_NOT_WORSE
 
 KINDS = ("收益型", "防雷型")
 DIRECTIONS = ("升", "降")
@@ -31,14 +31,16 @@ def decide(kind: str, cand: pd.DataFrame, base: pd.DataFrame, pair: dict, pair_c
         raise ValueError(f"类型只能是 {KINDS}：{kind}")
     diff, t = pair["差值"], pair["t"]
     predicted = prediction_holds(prediction, cand, base, pair)
-    earlier = [e for e in ERAS if e != LATEST_ERA]
+    earlier = [e for e in ERAS if e != LATEST_ERA and e in diff.index]   # 数据没覆盖的阶段不算；一个都没有就不满足
     if kind == "收益型":
         rows = {
             "配对差值的 t 值": (t, f"≥ {T_ADOPT}", t >= T_ADOPT),
             f"阶段{LATEST_ERA}差值": (diff[LATEST_ERA], "> 0", diff[LATEST_ERA] > 0),
-            "更早的阶段至少一个差值为正": (max(diff[e] for e in earlier), "> 0", any(diff[e] > 0 for e in earlier)),
+            "更早的阶段至少一个差值为正": (max((diff[e] for e in earlier), default=float("nan")), "> 0",
+                                    any(diff[e] > 0 for e in earlier)),
             "成本翻倍后全段差值": (pair_cost2["差值"][FULL], "> 0", pair_cost2["差值"][FULL] > 0),
-            "大亏只数不比基线多": (cand.loc[FULL, BIG] - base.loc[FULL, BIG], "≤ 0", cand.loc[FULL, BIG] <= base.loc[FULL, BIG]),
+            "大亏只数没有明显变多": (cand.loc[FULL, BIG] - base.loc[FULL, BIG], f"≤ max(1, {BIG_LOSS_SLACK:.0%} × 基线)",
+                               cand.loc[FULL, BIG] - base.loc[FULL, BIG] <= max(1.0, BIG_LOSS_SLACK * base.loc[FULL, BIG])),
         }
     else:
         before, after = float(base.loc[LATEST_ERA, BIG]), float(cand.loc[LATEST_ERA, BIG])

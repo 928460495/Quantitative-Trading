@@ -14,7 +14,7 @@ def test_frozen_values_match_framework_document():
     assert pr.OFFSETS == (0, 5, 10, 15) and pr.BENCH_EVERY == 20 and pr.NW_LAG == 20
     assert pr.BIG_LOSS == -0.40
     assert (pr.MAX_RUNS_PER_CARD, pr.MAX_CARDS, pr.MAX_CARDS_PER_FAMILY, pr.COOLDOWN_AFTER) == (6, 12, 3, 2)
-    assert (pr.T_ADOPT, pr.T_NOT_WORSE, pr.BIG_LOSS_CUT) == (2.0, -1.0, 0.30)
+    assert (pr.T_ADOPT, pr.T_NOT_WORSE, pr.BIG_LOSS_CUT, pr.BIG_LOSS_SLACK) == (2.0, -1.0, 0.30, 0.10)
 
 
 def test_eras_tile_the_development_segment_without_gaps_or_overlap():

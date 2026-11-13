@@ -16,7 +16,8 @@ def test_plan3d_baseline_matches_registered_spec():
     b = pc.PLAN3D
     assert dict(b.families) == p3.GROUPS and len(b.factors()) == 16
     assert (b.n_hold, b.rebalance_every, b.sell_mult, b.stop_loss, b.cost_multiplier) == (15, 20, 3, None, 1.0)
-    assert b.exclude == ("is_st", "loss_small", "cheap") and b.no_buy == ("high_vol",) and not b.exit_next_day
+    assert b.exclude == ("cheap", "is_st", "loss_small") and b.no_buy == ("high_vol",) and not b.exit_next_day
+    assert [n for n, _ in b.families] == sorted(p3.GROUPS)
 
 
 @pytest.mark.parametrize("offset", [0, 5])
@@ -37,7 +38,13 @@ def test_baseline_reproduces_plan3d_trade_for_trade(offset):
 
 def test_round_trip_and_replace():
     p = pc.PLAN3D.replace(n_hold=30, exclude=["is_st", "deduct_loss"], families={"甲": ["bp"], "乙": ["sue", "ret60"]})
-    assert p.n_hold == 30 and p.exclude == ("is_st", "deduct_loss") and p.families == (("甲", ("bp",)), ("乙", ("sue", "ret60")))
+    assert p.n_hold == 30 and p.exclude == ("deduct_loss", "is_st") and p.families == (("乙", ("sue", "ret60")), ("甲", ("bp",)))
+    q = pc.PLAN3D.replace(exclude=["is_st", "deduct_loss", "is_st"], families={"甲": ["bp"], "乙": ["sue", "ret60"]})
+    assert q.exclude == p.exclude and q.families == p.families                 # 写法不同、去重后是同一个
+    import yaml
+    for sort in (True, False):
+        text = yaml.safe_dump(p.to_dict(), allow_unicode=True, sort_keys=sort)
+        assert pc.Procedure.from_dict(yaml.safe_load(text)) == p              # 写进文件再读回来不变
     assert pc.Procedure.from_dict(p.to_dict()) == p and hash(p) == hash(pc.Procedure.from_dict(p.to_dict()))
     assert pc.PLAN3D.replace() == pc.PLAN3D
     with pytest.raises(ValueError, match="没有这些字段"):

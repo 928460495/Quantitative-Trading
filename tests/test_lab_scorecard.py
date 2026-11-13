@@ -137,7 +137,10 @@ def test_return_gate_needs_every_condition():
     assert not ok(pair=_pair(e1=-0.01, e2=-0.01, e3=0.05))[1]                  # 更早的阶段至少一个为正
     assert ok(pair=_pair(e1=-0.01, e2=0.01, e3=0.05))[1]
     assert not ok(cost2=_pair(e1=-0.05, e2=-0.05, e3=0.01))[1]                 # 成本翻倍后全段要为正
-    assert not ok(cand=_cards(big_cand=(10, 10, 11))[0])[1] and ok(cand=_cards(big_cand=(9, 10, 10))[0])[1]
+    assert ok(cand=_cards(big_cand=(10, 10, 11))[0])[1]                     # 30 笔里多 1 笔：容许
+    assert ok(cand=_cards(big_cand=(10, 10, 13))[0])[1] and not ok(cand=_cards(big_cand=(10, 10, 14))[0])[1]   # 多一成 = 3 笔
+    small = lambda big: _cards(big_base=(1, 1, 1), big_cand=big)[0]
+    assert not gates.decide("收益型", small((1, 1, 3)), _cards(big_base=(1, 1, 1))[1], _pair(), _pair(), UP)[1]   # 3 笔里多 2 笔：不行
     assert not ok(pred={"metric": "配对.全段", "direction": "降"})[1]            # 预期方向反了
     failed = ok(pair=_pair(t=1.0))[0]
     assert failed.index[~failed["满足"]].tolist() == ["配对差值的 t 值"]
@@ -154,6 +157,15 @@ def test_safety_gate_needs_fewer_big_losses_in_latest_era_without_getting_worse(
     assert not run(pair=_pair(e1=-0.2, e2=-0.2, e3=0.01, t=-1.0))[1] and run(pair=_pair(e3=0.01, t=-0.99))[1]
     assert not run(big_base=(10, 10, 0), big_cand=(10, 10, 0))[1]              # 基线本来就没有大亏：谈不上减少
     assert not run(pred={"metric": "三.大亏只数", "direction": "升"})[1]
+
+
+def test_return_gate_when_data_covers_only_the_latest_eras():
+    cand, base = _cards()
+    two = {"差值": pd.Series({"二": 0.01, "三": 0.01, "全段": 0.01}), "t": 2.5}
+    assert gates.decide("收益型", cand, base, two, two, UP)[1]
+    only = {"差值": pd.Series({"三": 0.01, "全段": 0.01}), "t": 2.5}
+    table, adopt = gates.decide("收益型", cand, base, only, only, UP)
+    assert not adopt and not table.loc["更早的阶段至少一个差值为正", "满足"]   # 没法核对更早的阶段：不算满足
 
 
 def test_prediction_metrics_and_bad_inputs():
