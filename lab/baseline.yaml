@@ -14,6 +14,9 @@ history:
 - date: '2026-11-13'
   card: H005
   note: 族间合成改用百分位排名平均（第 1 次账户检验采纳）
+- date: '2026-11-13'
+  card: null
+  note: 用户决定加入仓位管理：估值 + 趋势 25%–75%（按持股只数控制）、现金 2% 利息；补红利税（DECISIONS 2026-11-13）
 procedure:
   families:
     业绩超预期:
@@ -41,3 +44,8 @@ procedure:
   cost_multiplier: 1.0
   missing: zero
   blend: rank
+  overlay: value_trend
+  overlay_low: 0.25
+  overlay_high: 0.75
+  cash_yield: 0.02
+  dividend_tax: true
