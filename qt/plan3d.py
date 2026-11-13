@@ -95,8 +95,13 @@ def loss_small_revenue(net_profit_ttm: pd.DataFrame, deduct_ttm: pd.DataFrame, r
     floor 可以是一个数，也可以是按日期的序列（revenue_floor 的结果，按行对齐）。
     """
     loss = (net_profit_ttm < 0) | (deduct_ttm < 0)
-    small = revenue_ttm.lt(floor.reindex(revenue_ttm.index), axis=0) if isinstance(floor, pd.Series) else revenue_ttm < floor
-    return (loss & small).fillna(False).astype(bool)
+    if isinstance(floor, pd.Series):
+        f = floor.reindex(revenue_ttm.index)
+        small = revenue_ttm.lt(f, axis=0) & pd.DataFrame(np.repeat((f > 0).to_numpy()[:, None], revenue_ttm.shape[1], axis=1),
+                                                          index=revenue_ttm.index, columns=revenue_ttm.columns)
+    else:
+        small = revenue_ttm < floor
+    return (loss & small).fillna(False).astype(bool)                       # 门槛为 0 = 那时没有这条规则，什么都不触发
 
 
 def high_vol(vol_score: pd.DataFrame, cut: float) -> pd.DataFrame:

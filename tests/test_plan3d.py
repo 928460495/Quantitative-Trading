@@ -304,3 +304,6 @@ def test_loss_small_uses_the_dated_floor():
     rev = f([5e7, 2e8], [5e7, 2e8], [5e7, 2e8])
     got = p3.loss_small_revenue(net, ded, rev, p3.revenue_floor(idx))
     assert got.to_numpy().tolist() == [[False, False], [True, False], [True, True]]   # 2019 年还没有这条规则
+    neg = f([-5e6, 1e9], [-5e6, 1e9], [-5e6, 1e9])                           # 数据里偶尔有营收为负的异常值
+    got = p3.loss_small_revenue(net, ded, neg, p3.revenue_floor(idx))
+    assert got.to_numpy().tolist() == [[False, False], [True, False], [True, False]]  # 没有规则的时期，负营收也不触发
