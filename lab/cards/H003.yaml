@@ -1,0 +1,30 @@
+id: H003
+parent: H002
+family: 因子族
+kind: 收益型
+mechanism: >-
+  盈利在改善的公司，股价对好消息反应不足、之后继续走强：盈余公告后漂移（Ball & Brown 1968；Bernard & Thomas 1989）、
+  基本面动量（Chordia & Shivakumar 2006；Novy-Marx 2015 "Fundamentally, Momentum Is Fundamental Momentum"）。
+  在中国也有记录（Truong 2011，1994–2009 年盈余意外策略扣除流动性和交易成本后仍显著）。它也回答了 Novy-Marx（2013）
+  "便宜得有没有道理"的问题：便宜又在改善的，比便宜但在恶化的更可能是错杀。
+  基线里只有 sue 一个因子代表这个想法。利润同比、扣非同比、营收同比在训练段的 5 日 RankIC t 值都在 6.9–9.4，
+  当初没进候选，是因为单因子筛选的成本关用了"每天换股的账户"——文献综述（2026-11-12）已经认定这一关有方法缺陷，
+  慢信号以外一律被成本杀掉；profit_yoy 只差不到 1 个点。
+  它们和 sue 是同一个想法，所以并进同一组，不另占一份权重（避免计划 3d 里一个想法下几份注的错误）。
+change: 把"业绩超预期"组扩成"盈利改善"组：sue、profit_yoy、deduct_yoy、revenue_yoy 组内等权；三组等权不变
+prediction:
+  metric: 配对.全段
+  direction: 升
+falsification: >-
+  全段配对差值的 t 值低于 2；或者阶段三的差值不为正；或者阶段一、二的差值都不为正；或者成本翻倍后全段差值不为正；
+  或者大亏只数明显变多
+variant:
+  families:
+    盈利改善: [sue, profit_yoy, deduct_yoy, revenue_yoy]
+    便宜: [ep_deduct, bp, sp_ttm]
+    冷门: [turn_12m, gtja100, gtja081, gtja132]
+seen_before: >-
+  看过 lab/evidence/E003.md："成长"组（profit_yoy、deduct_yoy、revenue_yoy）单独打分时最好的五分之一比全体多
+  +8.0、+5.2、+6.7 个点（阶段一、二、三），前 15 名跌超两成的只数 0.26（随机 0.21）。也看过 E001、E002 和 H001、H002 的结果。
+  开发段上的结果只能说明机制有没有起作用，不算样本外证据。
+status: 已登记
