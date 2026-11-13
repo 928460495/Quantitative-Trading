@@ -11,6 +11,9 @@ history:
 - date: '2026-11-13'
   card: H002
   note: 去掉"跌得多"组（第 1 次账户检验采纳）
+- date: '2026-11-13'
+  card: H005
+  note: 族间合成改用百分位排名平均（第 1 次账户检验采纳）
 procedure:
   families:
     业绩超预期:
@@ -37,3 +40,4 @@ procedure:
   stop_loss: null
   cost_multiplier: 1.0
   missing: zero
+  blend: rank
