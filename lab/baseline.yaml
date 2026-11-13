@@ -5,6 +5,9 @@ history:
 - date: '2026-11-13'
   card: null
   note: 第一个基线：计划 3d 主方案
+- date: '2026-11-13'
+  card: H001
+  note: 合成时缺失的组按 0（截面平均）计入（第 2 次账户检验采纳；第 1 次因程序错误作废）
 procedure:
   families:
     业绩超预期:
@@ -39,3 +42,4 @@ procedure:
   exit_next_day: false
   stop_loss: null
   cost_multiplier: 1.0
+  missing: zero
