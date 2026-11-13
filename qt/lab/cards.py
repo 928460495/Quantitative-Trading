@@ -112,6 +112,10 @@ def check_budget(card: dict, cards: list[dict], runs: list[dict]) -> None:
         raise CardError(f"{card['id']} 已经跑了 {used} 次，一张卡最多 {MAX_RUNS_PER_CARD} 次")
     if len(cards) > MAX_CARDS:
         raise CardError(f"这个世代已经有 {len(cards)} 张卡，最多 {MAX_CARDS} 张")
+    same = [c["id"] for c in cards if c["id"] != card["id"] and c["status"] == REJECTED
+            and c.get("parent") == card.get("parent") and _canonical(c["variant"]) == _canonical(card["variant"])]
+    if same:
+        raise CardError(f"同一个改动已经在 {same[0]} 被否决：不能换个类型或说法再提（框架失效模式 F10）")
     family = [c for c in cards if c["family"] == card["family"]]
     if len(family) > MAX_CARDS_PER_FAMILY:
         raise CardError(f"方向「{card['family']}」已经有 {len(family)} 张卡，最多 {MAX_CARDS_PER_FAMILY} 张")
@@ -119,6 +123,17 @@ def check_budget(card: dict, cards: list[dict], runs: list[dict]) -> None:
                if c["id"] < card["id"] and c["status"] in (ADOPTED, REJECTED)]
     if len(decided) >= COOLDOWN_AFTER and all(s == REJECTED for s in decided[-COOLDOWN_AFTER:]):
         raise CardError(f"方向「{card['family']}」连续 {COOLDOWN_AFTER} 张卡没被采纳，本世代冷却")
+
+
+def _canonical(variant: dict) -> str:
+    """改动的规范写法：字典按键排序、列表按内容排序，写法不同但改动一样的会得到同一个字符串。"""
+    def norm(x):
+        if isinstance(x, dict):
+            return {k: norm(v) for k, v in sorted(x.items())}
+        if isinstance(x, (list, tuple)):
+            return sorted((norm(v) for v in x), key=lambda v: json.dumps(v, ensure_ascii=False, sort_keys=True))
+        return x
+    return json.dumps(norm(variant), ensure_ascii=False, sort_keys=True)
 
 
 def load_baseline(path: Path) -> Procedure:

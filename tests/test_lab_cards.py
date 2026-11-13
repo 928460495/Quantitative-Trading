@@ -65,7 +65,7 @@ def test_is_committed_tracks_git_state(tmp_path):
 
 
 def _cards(*specs):
-    return [{**GOOD, "id": i, "family": f, "status": s} for i, f, s in specs]
+    return [{**GOOD, "id": i, "family": f, "status": s, "variant": {"n_hold": 10 + k}} for k, (i, f, s) in enumerate(specs)]
 
 
 def test_budget_per_card_and_status():
@@ -137,3 +137,23 @@ def test_void_runs_do_not_use_budget_but_keep_their_numbers():
     assert rec["card"] == "H001" and rec["void"] == 2 and rec["reason"] == "程序错误" and "time" in rec
     with pytest.raises(cd.CardError, match="写明原因"):
         cd.void_record(full, "H001", 2, "  ")
+
+
+def test_a_rejected_change_cannot_come_back_under_another_label():
+    # 看到结果后换一类采纳规则再提同一个改动，等于看了结果再挑标准（失效模式 F10）
+    old = {**GOOD, "id": "H004", "family": "因子族", "kind": "收益型", "status": "未采纳", "parent": "H002",
+           "variant": {"families": {"便宜": ["ep_deduct"], "冷门": ["turn_12m"]}}}
+    again = {**old, "id": "H005", "family": "防雷", "kind": "防雷型", "status": "已登记",
+             "variant": {"families": {"冷门": ["turn_12m"], "便宜": ["ep_deduct"]}}}          # 写法不同、改动一样
+    with pytest.raises(cd.CardError, match="H004.*否决"):
+        cd.check_budget(again, [old, again], [])
+    shuffled = {**again, "variant": {"families": {"冷门": ["turn_12m"], "便宜": ["ep_deduct"]}, "exclude": ["is_st", "cheap"]}}
+    old2 = {**old, "variant": {"families": {"便宜": ["ep_deduct"], "冷门": ["turn_12m"]}, "exclude": ["cheap", "is_st"]}}
+    with pytest.raises(cd.CardError, match="否决"):
+        cd.check_budget(shuffled, [old2, shuffled], [])                        # 名单顺序不同也是同一个改动
+    other_parent = {**again, "parent": "H009"}                                 # 基线已经变了：可以重新提
+    cd.check_budget(other_parent, [old, other_parent], [])
+    different = {**again, "variant": {"families": {"便宜": ["ep_deduct", "bp"], "冷门": ["turn_12m"]}}}
+    cd.check_budget(different, [old, different], [])
+    adopted = {**old, "status": "已采纳"}
+    cd.check_budget(again, [adopted, again], [])                               # 只拦被否决的
