@@ -1,0 +1,30 @@
+# 最终测试的登记（scripts/lab_final.py 读它）。提交后不能改
+version: 只看选股：满仓、不做仓位管理、现金不计息、扣红利税（READY-r3 只报告的那个版本）
+procedure:
+  families:
+    业绩超预期: [sue]
+    便宜: [ep_deduct, bp, sp_ttm]
+    冷门: [turn_12m, gtja100, gtja081, gtja132]
+  n_hold: 15
+  rebalance_every: 20
+  sell_mult: 3
+  exclude: [cheap, is_st, loss_small]
+  no_buy: [high_vol]
+  exit_next_day: false
+  stop_loss: null
+  cost_multiplier: 1.0
+  missing: zero
+  blend: rank
+  overlay: none
+  overlay_low: 0.25
+  overlay_high: 0.75
+  cash_yield: 0.0
+  dividend_tax: true
+code_commit: 2b4901c
+window:
+  start: '2022-01-01'
+  end: '2026-10-23'
+approval:
+  date: '2026-11-13'
+  quote: 让"只看选股"的版本去封存段检验一次
+  exception: READY-r3 第 2a 条没满足（阶段三夏普 0.9432 对沪深300 0.9439，差 0.0007），用户批准破例
