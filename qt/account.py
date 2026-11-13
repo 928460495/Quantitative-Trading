@@ -10,14 +10,16 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 import pandas as pd
 
 from qt.costs import trade_cost
+from qt.drawdown import DrawdownTiers
 
 LOT = 100
+TRADING_DAYS = 252
 STAR_MIN_SHARES = 200  # 科创板最少 200 股，之后按 1 股加
 
 
@@ -32,6 +34,16 @@ class AccountRules:
     cooldown_days: int = 20
     drawdown_stop: float | None = 0.20
     cost_multiplier: float = 1.0
+    # 计划 3c（DECISIONS 2026-11-10）：默认值保持旧行为
+    rebalance_every: int = 1                     # 每隔几个信号日才做排名卖出和买入
+    min_trade: float = 0.0                       # 买入预算低于它就不买
+    drawdown_tiers: tuple | None = None          # 按回撤分档减仓（qt.drawdown.DEFAULT_TIERS）；和 drawdown_stop 二选一
+    tier_window: int = 250
+    tier_buffer: float = 0.02
+    # 仓位管理（DECISIONS 2026-11-13）：默认值保持旧行为
+    slot_budget: float | None = None             # 每只买入金额不超过净值的这个比例；配合 exposure 按持股只数控制仓位
+    cash_yield: float = 0.0                      # 现金的年化利息，每个交易日按 (1+y)^(1/252)−1 计入
+    dividend_tax: bool = False                   # 除权日按持有时间扣红利税（需要 MarketData.div_yield）
 
 
 @dataclass
@@ -46,6 +58,8 @@ class MarketData:
     can_buy: np.ndarray
     can_sell: np.ndarray
     industry: np.ndarray | None = None
+    force_exit: np.ndarray | None = None    # 信号日对齐：点名的持仓第二个交易日卖出，不等调仓日（框架 2.0）
+    div_yield: np.ndarray | None = None     # 除权日对齐：当天的现金分红比例（红利税用）
 
 
 def _wide(s: pd.Series, dates: pd.DatetimeIndex, instruments: pd.Index, fill, dtype) -> np.ndarray:
@@ -105,6 +119,7 @@ class _Account:
         self.cash = float(rules.cash)
         self.units: dict[int, float] = {}
         self.cost_price: dict[int, float] = {}
+        self.buy_day: dict[int, pd.Timestamp] = {}
         self.trades: list[tuple] = []
         self.cooldown_until: dict[int, int] = {}  # 止损卖出后，到这一天（含）为止不能买回
         self.day_cost = 0.0
@@ -125,6 +140,7 @@ class _Account:
         self.n_sells += 1
         self.trades.append((d.dates[i], d.instruments[col], "sell", round(value / raw), raw, value, cost, reason))
         del self.units[col], self.cost_price[col]
+        self.buy_day.pop(col, None)
 
     def buy(self, i: int, col: int, budget: float) -> float:
         """按预算买，付完成本现金不够就一手一手往下减。返回买入金额（0 表示没买）。"""
@@ -147,8 +163,33 @@ class _Account:
         self.n_buys += 1
         self.units[col] = value / adj
         self.cost_price[col] = adj
+        self.buy_day[col] = d.dates[i]
         self.trades.append((d.dates[i], code, "buy", shares, raw, value, cost, "buy"))
         return value
+
+
+def dividend_tax_rate(held_days: int, date: pd.Timestamp) -> float:
+    """红利税率（个人投资者）：2015-09-08 起 ≤30 天 20%、≤1 年 10%、>1 年 0；2013 年起 >1 年 5%；2013 年以前一律 10%。"""
+    if date < pd.Timestamp("2013-01-01"):
+        return 0.10
+    if held_days <= 30:
+        return 0.20
+    if held_days <= 365:
+        return 0.10
+    return 0.0 if date >= pd.Timestamp("2015-09-08") else 0.05
+
+
+def buy_budget(cash: float, empty: int, nav: float, n_hold: int, max_weight: float, fraction: float = 1.0) -> float:
+    """每只要买的股票分到的钱：空位平分可用现金，不超过单股上限。
+
+    按回撤分档减仓时（fraction < 1）每只再不超过 nav / n_hold，这样持股只数和投入的钱一起降到约 fraction；
+    否则卖掉一只后，空出来的钱会集中到剩下的少数几个位置上，仓位又回到接近满仓（计划 3c 复查发现，
+    DECISIONS 2026-11-10「回撤分档按原意修正」）。真实账户和快速模拟器共用。
+    """
+    budget = min(cash / empty, nav * max_weight)
+    if fraction < 1:
+        budget = min(budget, nav / n_hold)
+    return budget
 
 
 def _ranks(score_row: np.ndarray) -> np.ndarray:
@@ -166,6 +207,17 @@ def trend_exposure(index_close: pd.Series, window: int, low: float) -> pd.Series
     return pd.Series(np.where(ma.isna() | (index_close >= ma), 1.0, low), index=index_close.index)
 
 
+def index_volatility(index_close: pd.Series, window: int = 20) -> pd.Series:
+    """过去 window 天日收益的年化波动率（样本标准差 × √252），只用当天及以前的数据。"""
+    return index_close.pct_change().rolling(window).std() * np.sqrt(TRADING_DAYS)
+
+
+def vol_exposure(index_close: pd.Series, window: int, target: float) -> pd.Series:
+    """波动率控制（说明书第 6 节 B，计划 4 只作对照）：持股比例 = min(1, target / 当前波动率)；波动率还算不出时为 1。"""
+    sigma = index_volatility(index_close, window)
+    return (target / sigma).clip(upper=1.0).where(sigma > 0).fillna(1.0)
+
+
 def run_account(data: MarketData, rules: AccountRules = AccountRules(), exposure: pd.Series | None = None) -> AccountResult:
     """exposure：信号日 → 持股比例（缺失按 1），位置上限 = floor(n_hold × exposure)。
 
@@ -180,13 +232,28 @@ def run_account(data: MarketData, rules: AccountRules = AccountRules(), exposure
     if exposure is not None and not exposure.index.isin(data.dates).any():
         raise ValueError("exposure 的日期和行情对不上（全部缺失会被当成满仓，仓位控制就悄悄失效了）")
     exp = np.ones(len(data.dates)) if exposure is None else exposure.reindex(data.dates).fillna(1.0).to_numpy(float)
+    if rules.drawdown_tiers is not None and rules.drawdown_stop is not None:
+        raise ValueError("回撤分档和回撤兜底 C 只能用一个（计划 3c 起 drawdown_stop=None）")
+    tiers = None if rules.drawdown_tiers is None else DrawdownTiers(rules.drawdown_tiers, rules.tier_window, rules.tier_buffer)
+    # 回撤按"同一策略一直满仓"的影子净值算（DECISIONS 2026-11-10「回撤分档改按影子净值」）：
+    # 按账户自己的净值算，空仓后净值不动，要等一年前的高点滑出窗口才能回来
+    shadow = None if tiers is None else run_account(data, replace(rules, drawdown_tiers=None), exposure).daily["nav"].to_numpy()
     navs = [acct.cash]
     peak, halted, seen_out = acct.cash, False, False
-    rows = [(data.dates[0], acct.cash, acct.cash, 0.0, 0, rules.n_hold, 0.0, 0, 0)]
+    rows = [(data.dates[0], acct.cash, acct.cash, 0.0, 0, rules.n_hold, 0.0, 0, 0, 0.0)]
 
     for i in range(1, len(data.dates)):
         s = i - 1
         acct.day_cost, acct.n_buys, acct.n_sells = 0.0, 0, 0
+        day_tax = 0.0
+        if rules.dividend_tax and data.div_yield is not None:             # 除权日：前一天收盘还持有的才分红
+            for col in acct.units:
+                d = data.div_yield[i, col]
+                if d > 0:
+                    held = (data.dates[i] - acct.buy_day[col]).days
+                    tax = acct.units[col] * marks[s, col] * d * dividend_tax_rate(held, data.dates[i])
+                    acct.cash -= tax
+                    day_tax += tax
         ranks = _ranks(data.score[s])
         tradable_today = ~np.isnan(data.adj_close[i]) & ~np.isnan(data.raw_close[i])
 
@@ -200,8 +267,15 @@ def run_account(data: MarketData, rules: AccountRules = AccountRules(), exposure
         elif seen_out:
             halted, peak = False, navs[s]
         slot_limit = 0 if halted else int(np.floor(rules.n_hold * exp[s] + 1e-9))
+        cut_reason, fraction = "exposure", 1.0
+        if tiers is not None:
+            fraction = tiers.update(shadow[s])
+            tier_slots = DrawdownTiers.slots(rules.n_hold, fraction)
+            if tier_slots < slot_limit:
+                slot_limit, cut_reason = tier_slots, "tier"
+        rebalance = s % rules.rebalance_every == 0
 
-        # 1. 卖：退市 → 回撤兜底 → 止损 → 排名 → 仓位上限（多出来的按排名从低到高卖）
+        # 1. 卖：退市 → 回撤兜底 → 止损 → 事件点名 → 排名 → 仓位上限（多出来的按排名从低到高卖）
         for col in list(acct.units):
             if i > last_price_day[col]:  # 之后再也没有价格：按最后价格卖出（偏乐观）
                 acct.sell(i, col, "delisted", adj=marks[i, col], raw=raw_marks[i, col])
@@ -213,19 +287,25 @@ def run_account(data: MarketData, rules: AccountRules = AccountRules(), exposure
             elif rules.stop_loss is not None and marks[s, col] <= acct.cost_price[col] * (1 - rules.stop_loss):
                 acct.sell(i, col, "stop")
                 acct.cooldown_until[col] = i + rules.cooldown_days
-            elif ranks[col] > rules.sell_rank:
+            elif data.force_exit is not None and data.force_exit[s, col]:
+                acct.sell(i, col, "event")
+            elif rebalance and ranks[col] > rules.sell_rank:
                 acct.sell(i, col, "rank")
         for col in sorted(acct.units, key=lambda c: -ranks[c]):
             if len(acct.units) <= slot_limit:
                 break
             if data.can_sell[s, col] and tradable_today[col]:
-                acct.sell(i, col, "exposure")
+                acct.sell(i, col, cut_reason)
 
         # 2. 买
-        empty = slot_limit - len(acct.units)
+        empty = slot_limit - len(acct.units) if rebalance else 0
         if empty > 0:
             nav = acct.cash + sum(acct.value_of(c, marks[i]) for c in acct.units)
-            budget = min(acct.cash / empty, nav * rules.max_stock_weight)
+            budget = buy_budget(acct.cash, empty, nav, rules.n_hold, rules.max_stock_weight, fraction)
+            if rules.slot_budget is not None:
+                budget = min(budget, nav * rules.slot_budget)
+            if budget < rules.min_trade:
+                empty = 0
             industry_value: dict[object, float] = {}
             if data.industry is not None:
                 for c in acct.units:
@@ -239,6 +319,8 @@ def run_account(data: MarketData, rules: AccountRules = AccountRules(), exposure
                     continue
                 if acct.cooldown_until.get(col, -1) >= i:
                     continue
+                if data.force_exit is not None and data.force_exit[s, col]:   # 被点名要卖的，自然也不买
+                    continue
                 ind = None if data.industry is None else data.industry[s, col]
                 if ind is not None:
                     shares = lot_shares(min(budget, acct.cash), data.raw_close[i, col], data.instruments[col])
@@ -250,18 +332,18 @@ def run_account(data: MarketData, rules: AccountRules = AccountRules(), exposure
                     if ind is not None:
                         industry_value[ind] = industry_value.get(ind, 0.0) + value
 
-        # 3. 记账
+        # 3. 记账：现金利息先计入（不算成本）
+        if rules.cash_yield:
+            acct.cash *= (1 + rules.cash_yield) ** (1 / TRADING_DAYS)
         stock_value = sum(acct.value_of(c, marks[i]) for c in acct.units)
         navs.append(acct.cash + stock_value)
         rows.append((data.dates[i], acct.cash + stock_value, acct.cash, stock_value, len(acct.units), slot_limit,
-                     acct.day_cost, acct.n_buys, acct.n_sells))
+                     acct.day_cost, acct.n_buys, acct.n_sells, day_tax))
 
     daily = pd.DataFrame(rows, columns=["date", "nav", "cash", "stock_value", "n_holdings", "slot_limit", "cost",
-                                        "n_buys", "n_sells"]).set_index("date")
+                                        "n_buys", "n_sells", "tax"]).set_index("date")
     return AccountResult(daily=daily, trades=pd.DataFrame(acct.trades, columns=_TRADE_COLUMNS))
 
-
-TRADING_DAYS = 252
 
 
 def account_metrics(result: AccountResult, bench_close: pd.Series) -> dict[str, float]:

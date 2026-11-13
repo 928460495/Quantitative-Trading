@@ -323,3 +323,289 @@ def test_exposure_without_matching_dates_is_rejected():
     wrong = pd.Series(0.0, index=pd.bdate_range("2030-01-01", periods=6))
     with pytest.raises(ValueError, match="exposure"):
         run_account(data, POS, exposure=wrong)
+
+
+from qt.account import index_volatility, vol_exposure  # noqa: E402
+
+
+def test_vol_exposure_scales_down_when_volatility_rises():
+    idx = pd.bdate_range("2019-01-02", periods=80)
+    rng = np.random.default_rng(0)
+    r = np.r_[rng.normal(0, 0.01, 40), rng.normal(0, 0.02, 40)]          # 后半段波动翻倍
+    close = pd.Series(1000 * np.exp(np.cumsum(r)), index=idx)
+    sigma = index_volatility(close, window=20)
+    target = sigma.iloc[20:40].median()
+    out = vol_exposure(close, window=20, target=target)
+    assert out.iloc[:20].eq(1.0).all()                                   # 窗口还没满：满仓
+    assert out.max() <= 1.0
+    assert out.iloc[60:].mean() == pytest.approx(0.5, abs=0.15)          # 波动翻倍 → 约一半
+    assert out.iloc[35] == pytest.approx(min(1.0, target / sigma.iloc[35]))
+
+
+def test_vol_exposure_uses_only_data_up_to_that_day():
+    idx = pd.bdate_range("2019-01-02", periods=60)
+    close = pd.Series(1000 * np.exp(np.cumsum(np.random.default_rng(1).normal(0, 0.01, 60))), index=idx)
+    changed = close.copy()
+    changed.iloc[40:] *= np.exp(np.cumsum(np.random.default_rng(2).normal(0, 0.05, 20)))
+    a, b = vol_exposure(close, 20, 0.15), vol_exposure(changed, 20, 0.15)
+    pd.testing.assert_series_equal(a.iloc[:40], b.iloc[:40])
+
+
+def test_index_volatility_is_annualized_std_of_daily_returns():
+    idx = pd.bdate_range("2019-01-02", periods=30)
+    close = pd.Series(np.exp(np.cumsum(np.random.default_rng(3).normal(0, 0.01, 30))) * 100, index=idx)
+    want = close.pct_change().rolling(20).std() * np.sqrt(252)
+    pd.testing.assert_series_equal(index_volatility(close, 20), want, check_names=False)
+
+
+# ---------- 计划 3c 任务 3：调仓间隔、最小交易额、按回撤分档减仓 ----------
+
+from qt.drawdown import DEFAULT_TIERS  # noqa: E402
+
+ONE = dict(n_hold=1, sell_rank=1, max_stock_weight=1.0, stop_loss=None, drawdown_stop=None)
+
+
+def test_rules_new_fields_default_to_old_behavior():
+    r = AccountRules()
+    assert (r.rebalance_every, r.min_trade, r.drawdown_tiers, r.tier_window, r.tier_buffer) == (1, 0.0, None, 250, 0.02)
+
+
+def test_rebalance_every_blocks_rank_sells_and_buys_between_rebalance_days():
+    scores = {"A": [5, 1, 1, 1, 1, 1], "B": [1, 5, 5, 5, 5, 5]}
+    res = run_account(_scenario(scores, 6), AccountRules(rebalance_every=3, **ONE))
+    t = res.trades
+    dates = pd.bdate_range("2019-01-02", periods=6)
+    assert list(zip(t["instrument"], t["side"])) == [("A", "buy"), ("A", "sell"), ("B", "buy")]
+    assert t["date"].iloc[1] == dates[4] and t["date"].iloc[2] == dates[4]   # 信号日 3 才调仓
+
+
+def test_stop_loss_still_fires_on_non_rebalance_day():
+    rules = AccountRules(n_hold=1, sell_rank=3, max_stock_weight=1.0, stop_loss=0.20, drawdown_stop=None,
+                         rebalance_every=10)
+    res = run_account(_scenario({"A": [5] * 5, "B": [1] * 5}, 5, prices={"A": [10, 10, 7.5, 7.5, 7.5], "B": [10] * 5}),
+                      rules)
+    sells = res.trades[res.trades["side"] == "sell"]
+    assert list(sells["reason"]) == ["stop"]
+    assert sells["date"].iloc[0] == pd.bdate_range("2019-01-02", periods=5)[3]
+
+
+def test_min_trade_skips_small_budget():
+    rules = AccountRules(cash=1500, min_trade=2000, **ONE)
+    res = run_account(_scenario({"A": [5, 5, 5]}, 3, price=1.0), rules)
+    assert res.trades.empty
+    rules_ok = AccountRules(cash=1500, min_trade=1000, **ONE)
+    assert not run_account(_scenario({"A": [5, 5, 5]}, 3, price=1.0), rules_ok).trades.empty
+
+
+def test_tiers_cut_holdings_next_day_and_sell_lowest_rank():
+    rules = AccountRules(n_hold=3, sell_rank=10, max_stock_weight=0.34, stop_loss=None, drawdown_stop=None,
+                         drawdown_tiers=DEFAULT_TIERS)
+    drop = [10, 10, 8.8, 8.8, 8.8]
+    scores = {"A": [5] * 5, "B": [4] * 5, "C": [3] * 5, "D": [1] * 5}
+    res = run_account(_scenario(scores, 5, prices={c: drop for c in "ABCD"}), rules)
+    sells = res.trades[res.trades["side"] == "sell"]
+    assert list(sells["instrument"]) == ["C"] and list(sells["reason"]) == ["tier"]
+    assert sells["date"].iloc[0] == pd.bdate_range("2019-01-02", periods=5)[3]     # 信号日 2 判断，第 3 天卖
+    assert res.daily["slot_limit"].iloc[3] == 2
+
+
+def test_tiers_with_drawdown_stop_raises():
+    with pytest.raises(ValueError):
+        run_account(_scenario({"A": [5, 5]}, 2), AccountRules(drawdown_stop=0.2, drawdown_tiers=DEFAULT_TIERS))
+
+
+def test_rebalance_day_limit_down_keeps_position_until_next_rebalance():
+    scores = {"A": [5, 1, 1, 1, 1, 1], "B": [1, 5, 5, 5, 5, 5]}
+    can_sell = {"A": [True, True, False, True, True, True], "B": [True] * 6}
+    res = run_account(_scenario(scores, 6, can_sell=can_sell), AccountRules(rebalance_every=2, **ONE))
+    sells = res.trades[res.trades["side"] == "sell"]
+    assert sells["date"].iloc[0] == pd.bdate_range("2019-01-02", periods=6)[5]    # 信号日 2 卖不出，等到信号日 4
+
+
+def test_tiers_cap_money_not_just_names():
+    # 回撤 17% 进 1/3 档后，持股只数和投入的钱都应该降到约 1/3（复查发现：只限只数时钱会全部回到少数几只里）
+    rng = np.random.default_rng(7)
+    n_days, codes = 30, list("ABCDEFGH")
+    scores = {c: list(rng.normal(size=n_days)) for c in codes}
+    prices = {c: [10.0, 10.0] + [8.3] * (n_days - 2) for c in codes}
+    rules = AccountRules(n_hold=6, sell_rank=6, max_stock_weight=1.0, stop_loss=None, drawdown_stop=None,
+                         drawdown_tiers=DEFAULT_TIERS)
+    daily = run_account(_scenario(scores, n_days, prices=prices), rules).daily
+    exposure = daily["stock_value"] / daily["nav"]
+    assert exposure.iloc[10:].max() <= 1 / 3 + 0.01
+
+
+def test_tiers_follow_strategy_back_in_after_cash():
+    # 跌 25% 进空仓档后，策略本身（假设一直满仓）回升到离高点不到 8%：账户应该重新买回，而不是在现金里等一年
+    days = 20
+    path = [10, 10, 7.5, 7.5, 8.0, 8.5, 9.0, 9.5, 9.6] + [9.8] * (days - 9)
+    scores = {c: [5 - i] * days for i, c in enumerate("ABC")}
+    rules = AccountRules(n_hold=3, sell_rank=6, max_stock_weight=0.34, stop_loss=None, drawdown_stop=None,
+                         drawdown_tiers=DEFAULT_TIERS)
+    daily = run_account(_scenario(scores, days, prices={c: path for c in "ABC"}), rules).daily
+    assert daily["slot_limit"].iloc[4] == 0                  # 信号日 3：回撤 25%，空仓
+    assert daily["n_holdings"].iloc[-1] == 3                 # 策略回升后重新满仓
+
+
+# ---------- 事件型退出（框架 2.0：排除名单命中的持仓第二个交易日卖出，不等调仓日） ----------
+
+def _event_data(force):
+    import dataclasses
+    from qt.wide_eval import _market_data
+    idx = pd.bdate_range("2020-01-01", periods=30)
+    cols = ["SH600000", "SH600001", "SH600002"]
+    close = pd.DataFrame(10.0, index=idx, columns=cols)
+    score = pd.DataFrame([[3.0, 2.0, 1.0]] * len(idx), index=idx, columns=cols)
+    true = pd.DataFrame(True, index=idx, columns=cols)
+    data = _market_data(score, close, close, true, true, None)
+    return idx, cols, dataclasses.replace(data, force_exit=force(idx, cols))
+
+
+def test_force_exit_sells_on_next_trading_day_even_between_rebalances():
+    def force(idx, cols):
+        f = np.zeros((len(idx), len(cols)), dtype=bool)
+        f[7:, 0] = True                                   # 第 7 个信号日起，第一只被点名
+        return f
+    idx, cols, data = _event_data(force)
+    rules = AccountRules(n_hold=2, sell_rank=3, stop_loss=None, drawdown_stop=None, rebalance_every=20,
+                         max_stock_weight=1.0, max_industry_weight=1.0)
+    tr = run_account(data, rules).trades
+    sells = tr[tr["side"] == "sell"]
+    assert len(sells) == 1 and sells["instrument"].iloc[0] == cols[0]
+    assert sells["date"].iloc[0] == idx[8] and sells["reason"].iloc[0] == "event"   # 信号日 7 → 第 8 天成交
+    buys = tr[tr["side"] == "buy"]
+    assert buys[buys["instrument"] == cols[0]]["date"].tolist() == [idx[1]]       # 被点名的不再买回
+    assert buys[buys["instrument"] == cols[2]]["date"].tolist() == [idx[21]]      # 空位到下个调仓日才补，补的是别的股票
+
+
+def test_force_exit_waits_until_the_stock_can_be_sold():
+    import dataclasses
+    def force(idx, cols):
+        f = np.zeros((len(idx), len(cols)), dtype=bool)
+        f[7:, 0] = True
+        return f
+    idx, cols, data = _event_data(force)
+    can_sell = data.can_sell.copy()
+    can_sell[7:12, 0] = False                             # 连续跌停 5 天卖不掉
+    data = dataclasses.replace(data, can_sell=can_sell)
+    rules = AccountRules(n_hold=2, sell_rank=3, stop_loss=None, drawdown_stop=None, rebalance_every=20,
+                         max_stock_weight=1.0, max_industry_weight=1.0)
+    sells = run_account(data, rules).trades.query("side == 'sell'")
+    assert len(sells) == 1 and sells["date"].iloc[0] == idx[13]
+
+
+def test_no_force_exit_matrix_means_old_behaviour():
+    idx, cols, data = _event_data(lambda idx, cols: None)
+    assert data.force_exit is None
+    rules = AccountRules(n_hold=2, sell_rank=3, stop_loss=None, drawdown_stop=None, rebalance_every=20,
+                         max_stock_weight=1.0, max_industry_weight=1.0)
+    assert run_account(data, rules).trades.query("side == 'sell'").empty
+
+
+# ---------- 仓位管理要用的：每只金额上限、现金利息（DECISIONS 2026-11-13） ----------
+
+def _flat_data(n_days=30, n_stocks=6, price=10.0):
+    from qt.wide_eval import _market_data
+    idx = pd.bdate_range("2020-01-01", periods=n_days)
+    cols = [f"SH60000{i}" for i in range(n_stocks)]
+    close = pd.DataFrame(price, index=idx, columns=cols)
+    score = pd.DataFrame([list(range(n_stocks, 0, -1))] * n_days, index=idx, columns=cols, dtype=float)
+    true = pd.DataFrame(True, index=idx, columns=cols)
+    return idx, cols, _market_data(score, close, close, true, true, None)
+
+
+def _plain(**kw):
+    return AccountRules(**{"n_hold": 4, "sell_rank": 6, "stop_loss": None, "drawdown_stop": None, "rebalance_every": 20,
+                           "max_stock_weight": 1.0, "max_industry_weight": 1.0, **kw})
+
+
+def test_slot_budget_caps_each_purchase_and_leaves_cash():
+    idx, cols, data = _flat_data()
+    exposure = pd.Series(0.5, index=idx)                                       # 4 × 0.5 = 2 只
+    res = run_account(data, _plain(slot_budget=0.05), exposure)
+    buys = res.trades[res.trades["side"] == "buy"]
+    assert len(buys) == 2 and (buys["value"] <= 5_000).all() and (buys["value"] >= 4_900).all()
+    assert res.daily["cash"].iloc[-1] > 89_000                                 # 其余都是现金
+    free = run_account(data, _plain(), exposure)                               # 不设上限：两只平分全部现金
+    assert free.trades.query("side == 'buy'")["value"].min() > 45_000
+
+
+def test_cash_yield_accrues_daily_on_idle_cash():
+    idx, cols, data = _flat_data(n_days=253)
+    rules = _plain(slot_budget=0.05, cash_yield=0.02)
+    res = run_account(data, rules, pd.Series(0.0, index=idx))                  # 一只都不买，全是现金
+    assert res.trades.empty
+    nav = res.daily["nav"]
+    assert nav.iloc[-1] / nav.iloc[0] == pytest.approx(1.02, rel=1e-9)        # 252 个交易日正好一年
+    assert run_account(data, _plain(), pd.Series(0.0, index=idx)).daily["nav"].iloc[-1] == 100_000   # 默认不计息
+    assert (res.daily["cost"] == 0).all()                                      # 利息不算进成本
+
+
+def test_defaults_keep_the_old_behaviour():
+    r = AccountRules()
+    assert r.slot_budget is None and r.cash_yield == 0.0
+
+
+def test_slot_budget_is_a_share_of_net_value_not_of_remaining_cash():
+    idx, cols, data = _flat_data(n_days=45)
+    exposure = pd.Series(0.5, index=idx)
+    exposure.iloc[20:] = 1.0                                                   # 第 20 个信号日起放到 4 只
+    res = run_account(data, _plain(slot_budget=0.15), exposure)
+    later = res.trades[(res.trades["side"] == "buy") & (res.trades["date"] > idx[1])]
+    assert len(later) == 2
+    assert (later["value"] >= 14_000).all() and (later["value"] <= 15_000).all()   # 净值的 15%（按一手 1000 元取整），不是剩余现金（约 7 万）的 15%
+
+
+# ---------- 红利税（DECISIONS 2026-11-13） ----------
+
+def test_dividend_tax_rate_by_holding_period_and_date():
+    from qt.account import dividend_tax_rate
+    d = pd.Timestamp
+    assert dividend_tax_rate(30, d("2020-06-01")) == 0.20 and dividend_tax_rate(31, d("2020-06-01")) == 0.10
+    assert dividend_tax_rate(365, d("2020-06-01")) == 0.10 and dividend_tax_rate(366, d("2020-06-01")) == 0.0
+    assert dividend_tax_rate(400, d("2015-09-07")) == 0.05 and dividend_tax_rate(400, d("2015-09-08")) == 0.0
+    assert dividend_tax_rate(5, d("2012-12-31")) == 0.10 and dividend_tax_rate(5, d("2013-01-04")) == 0.20
+
+
+def test_dividend_tax_is_taken_from_cash_on_the_ex_date():
+    import dataclasses
+    idx, cols, data = _flat_data(n_days=60, n_stocks=6)
+    div = np.zeros(data.score.shape)
+    div[40, 0] = 0.05                                                          # 第 40 天第一只股票分红 5%
+    data = dataclasses.replace(data, div_yield=div)
+    rules = _plain(slot_budget=0.25, dividend_tax=True)
+    res = run_account(data, rules, pd.Series(1.0, index=idx))
+    held = res.trades.query("side == 'buy' and instrument == @cols[0]")
+    assert len(held) == 1
+    value = held["value"].iloc[0]                                              # 股价不变，持仓价值不变
+    days = (idx[40] - held["date"].iloc[0]).days
+    want = value * 0.05 * (0.10 if days > 30 else 0.20)
+    assert res.daily["tax"].iloc[40] == pytest.approx(want)
+    assert res.daily["tax"].drop(index=idx[40]).sum() == 0
+    assert res.daily["nav"].iloc[40] == pytest.approx(res.daily["nav"].iloc[39] - want)
+    assert (res.daily["cost"].iloc[40] == 0)                                   # 税不算交易成本
+    off = run_account(data, _plain(slot_budget=0.25), pd.Series(1.0, index=idx))
+    assert off.daily["tax"].sum() == 0                                         # 默认不扣
+
+
+def test_dividend_tax_ignores_stocks_not_held():
+    import dataclasses
+    idx, cols, data = _flat_data(n_days=60, n_stocks=6)
+    div = np.zeros(data.score.shape)
+    div[40, 5] = 0.05                                                          # 排最后的那只，没买
+    res = run_account(dataclasses.replace(data, div_yield=div), _plain(slot_budget=0.25, dividend_tax=True),
+                      pd.Series(1.0, index=idx))
+    assert res.daily["tax"].sum() == 0
+
+
+def test_dividend_tax_counts_days_from_the_actual_purchase():
+    import dataclasses
+    idx, cols, data = _flat_data(n_days=60, n_stocks=6)
+    exposure = pd.Series(0.5, index=idx)
+    exposure.iloc[20:] = 1.0                                                   # 第 21 个交易日才买进第 3、4 只
+    div = np.zeros(data.score.shape)
+    div[30, 2] = 0.05                                                          # 第 3 只在买入后 9 个交易日除权
+    res = run_account(dataclasses.replace(data, div_yield=div), _plain(slot_budget=0.25, dividend_tax=True), exposure)
+    bought = res.trades.query("side == 'buy' and instrument == @cols[2]")
+    assert bought["date"].iloc[0] == idx[21]
+    assert res.daily["tax"].iloc[30] == pytest.approx(bought["value"].iloc[0] * 0.05 * 0.20)   # 不到 30 天：20%

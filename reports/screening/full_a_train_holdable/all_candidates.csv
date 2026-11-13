@@ -1,0 +1,18 @@
+factor,icir,kept,status,dropped_by,corr,category
+ep_deduct,0.345279,True,留下,,,价值
+bp,0.342778,True,留下,,,价值
+sp_ttm,0.270518,True,留下,,,价值
+ret60,0.413247,True,留下,,,动量/反转
+ret120,0.331802,True,留下,,,动量/反转
+high52w,0.185529,True,留下,,,动量/反转
+lit_high52w,0.178263,False,已满 3 个，未比较,,,动量/反转
+sue,0.409306,True,留下,,,成长
+turn_12m,0.331949,True,留下,,,流动性
+gtja100,0.690748,True,留下,,,短周期价量
+gtja081,0.543642,False,和 gtja100 太像,gtja100,0.923247,短周期价量
+gtja132,0.527145,True,留下,,,短周期价量
+a158_MA60,0.482614,True,留下,,,短周期价量
+a158_QTLU60,0.457091,False,已满 3 个，未比较,,,短周期价量
+a158_ROC60,0.413785,False,已满 3 个，未比较,,,短周期价量
+a158_MAX60,0.259588,False,已满 3 个，未比较,,,短周期价量
+price_level,0.133677,True,留下,,,规模

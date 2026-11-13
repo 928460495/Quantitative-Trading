@@ -44,3 +44,11 @@ def test_ex_dividend_day_uses_reference_preclose():
 def test_missing_preclose_is_not_a_limit():
     at_up, at_down = limit_flags(pd.Series([10.0]), pd.Series([np.nan]), pd.Series([0.10]))
     assert not at_up.iloc[0] and not at_down.iloc[0]
+
+
+def test_main_board_st_limit_is_10pct_from_2026_07_06():
+    # 2026-07-06 起主板 ST、*ST 涨跌幅由 5% 改为 10%（DECISIONS 2026-11-12）；创业板 ST 一直是 20%
+    out = _pct(["SH600000", "SH600000", "SZ000001", "SH600000", "SH600000", "SZ300001", "SZ300001"],
+               ["2026-07-03", "2026-07-06", "2026-10-09", "2026-07-03", "2026-07-06", "2026-07-03", "2026-07-06"],
+               [1, 1, 1, 0, 0, 1, 1])
+    assert list(out) == [0.05, 0.10, 0.10, 0.10, 0.10, 0.20, 0.20]

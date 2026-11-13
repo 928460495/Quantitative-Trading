@@ -100,7 +100,15 @@ python scripts/collect_full_a.py
 - 每年覆盖情况表：`daily` 应该接近 `listed`；财务表（`income` 等）明显少于 `listed` 的年份，把这张表发给 Claude
 - 最后一行是生成的文件，例如 `data/full_a_20261027.tar`
 
-### 4. 上传到 GitHub Release
+### 4a. 在本机研究：直接解包（不用上传）
+
+```bash
+python scripts/download_full_a.py --archive data/full_a_20261027.tar
+```
+
+文件名换成第 3 步最后一行显示的那个。解包到 `~/.qlib/qt_full_a`，版本记为 `local-20261027`。
+
+### 4b. 在云端研究：上传到 GitHub Release
 
 1. 打开 https://github.com/928460495/Quantitative-Trading/releases/new
 2. "Choose a tag" 里输入新 tag，例如 `full-a-20261027`（和文件名里的日期一致），选 "Create new tag"

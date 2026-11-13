@@ -101,3 +101,25 @@ def test_align_accepts_categorical_instrument_index():
     idx = pd.MultiIndex.from_arrays([CAL, pd.Categorical(["SH600000"] * len(CAL))], names=["datetime", "instrument"])
     out = align_to_days(rec, ["net_profit"], idx, CAL)
     assert out["net_profit"].iloc[-1] == 100.0
+
+
+def test_level_yoy_compares_same_quarter_last_year():
+    from qt.fundamentals import level_yoy
+
+    df = _records([100.0, 110.0, 120.0, 130.0, 150.0])
+    y = level_yoy(df, "net_profit")
+    assert np.isnan(y.iloc[3]) and y.iloc[4] == pytest.approx(0.5)
+
+
+def test_sue_standardizes_unexpected_single_quarter():
+    from qt.fundamentals import sue
+
+    # 单季：每年 4 个季度；同比变化 = 单季 − 去年同季
+    cumulative = [1.0, 2.0, 3.0, 4.0, 2.0, 4.0, 6.0, 8.0, 3.0, 6.0, 9.0, 12.0, 5.0]
+    df = _records(cumulative)
+    s = sue(df, "net_profit", quarters=8)
+    sq = np.array([1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 5.0])
+    change = sq[4:] - sq[:-4]                    # 9 个同比变化
+    expect = change[-1] / np.std(change[-8:], ddof=1)
+    assert s.iloc[-1] == pytest.approx(expect)
+    assert np.isnan(s.iloc[10])                  # 同比变化还不够 8 个

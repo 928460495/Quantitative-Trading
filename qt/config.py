@@ -20,7 +20,15 @@ SEGMENTS: dict[str, tuple[str, str | None]] = {
     "train": ("2010-01-01", "2018-12-31"),
     "valid": ("2019-01-01", "2021-12-31"),
     "test": ("2022-01-01", None),
+    "live": ("2026-10-26", None),     # 纸面跟单：最终测试窗口（到 2026-10-23）之后
 }
+
+# 最终测试已经做过（DECISIONS 2026-11-13，lab/reports/FINAL.md）：封存段只当体检，读 2022 年以后的数据不再需要解锁。
+# 测试里默认按 False 跑（tests/conftest.py），保证"锁着"的行为仍然被检查
+TEST_SEGMENT_SPENT = True
+
+# 最终测试窗口的终点（DECISIONS 2026-11-13）：Qlib 数据包日历的最后一天。之后的数据留给纸面跟单
+FINAL_TEST_END = "2026-10-23"
 
 # 最长的前瞻窗口：IC 衰减最长看 20 天，加上 T+1 入场的 1 天
 MAX_FORWARD_DAYS = 21
@@ -33,15 +41,43 @@ class TestSegmentLockedError(RuntimeError):
 
 
 def is_test_unlocked() -> bool:
-    return os.environ.get("QT_UNLOCK_TEST") == "1"
+    return os.environ.get("QT_UNLOCK_TEST") == "1" or TEST_SEGMENT_SPENT
 
 
 def segment(name: str) -> tuple[str, str | None]:
     if name not in SEGMENTS:
         raise KeyError(f"未知的样本段: {name}，可选 {list(SEGMENTS)}")
-    if name == "test" and not is_test_unlocked():
+    if name in ("test", "live") and not is_test_unlocked():
         raise TestSegmentLockedError("最终测试段已封存，只在最后一次最终测试时用 QT_UNLOCK_TEST=1 解锁")
     return SEGMENTS[name]
+
+
+def segment_range(name: str) -> tuple[str, str]:
+    """和 segment 一样，但测试段的终点是登记好的 FINAL_TEST_END（不取到最新）。"""
+    start, end = segment(name)
+    if end is not None:
+        return start, end
+    return start, FINAL_TEST_END if name == "test" else latest_data_date()
+
+
+def latest_data_date(data_dir: Path | None = None, full_a_dir: Path | None = None) -> str:
+    """两份数据共同的最后一天：Qlib 数据包日历的最后一天和全 A 日线的最后一天，取较早的。只读日期，不读行情。"""
+    import pyarrow.parquet as pq
+
+    data_dir, full_a_dir = data_dir or DATA_DIR, full_a_dir or FULL_A_DIR
+    qlib_last = (Path(data_dir) / "calendars" / "day.txt").read_text().split()[-1]
+    f = pq.ParquetFile(Path(full_a_dir) / "daily.parquet")
+    i = f.schema_arrow.get_field_index("date")
+    daily_last = max(pd.Timestamp(f.metadata.row_group(g).column(i).statistics.max) for g in range(f.num_row_groups))
+    return str(min(pd.Timestamp(qlib_last), daily_last).date())
+
+
+def parse_segments(arg: str) -> list[str]:
+    """数据脚本的 --segment 参数：both = 训练段和验证段；test 要先解锁（只在批准的最终测试前生成数据时用）。"""
+    names = ["train", "valid"] if arg == "both" else [arg]
+    for name in names:
+        segment(name)
+    return names
 
 
 def check_range(start: str, end: str | None) -> None:

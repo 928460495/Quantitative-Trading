@@ -1,0 +1,60 @@
+factor,icir,kept,status,dropped_by,corr,category
+ep_ttm,0.406670,True,留下,,,价值
+ep_deduct,0.345279,False,和 ep_ttm 太像,ep_ttm,0.833353,价值
+bp,0.342778,True,留下,,,价值
+ep_self,0.327110,False,和 ep_ttm 太像,ep_ttm,0.923436,价值
+sp_ttm,0.270518,True,留下,,,价值
+cfp_ttm,0.121480,False,已满 3 个，未比较,,,价值
+skew60,0.567404,True,留下,,,低波动
+ivol20,0.509781,True,留下,,,低波动
+range20,0.383440,False,和 ivol20 太像,ivol20,0.821535,低波动
+ivol60,0.376309,False,和 ivol20 太像,ivol20,0.740719,低波动
+vol60,0.292448,True,留下,,,低波动
+intraday20,0.548170,True,留下,,,动量/反转
+ret20,0.510160,False,和 intraday20 太像,intraday20,0.829456,动量/反转
+lit_rev20,0.510160,False,和 intraday20 太像,intraday20,0.829456,动量/反转
+ret60,0.413247,True,留下,,,动量/反转
+low52w,0.380269,True,留下,,,动量/反转
+ret120,0.331802,False,已满 3 个，未比较,,,动量/反转
+high52w,0.185529,False,已满 3 个，未比较,,,动量/反转
+lit_high52w,0.178263,False,已满 3 个，未比较,,,动量/反转
+sue,0.409306,True,留下,,,成长
+deduct_yoy,0.379999,True,留下,,,成长
+profit_yoy,0.376676,False,和 deduct_yoy 太像,deduct_yoy,0.812190,成长
+revenue_yoy,0.282064,True,留下,,,成长
+abn_turn,0.500301,True,留下,,,流动性
+turn_12m,0.331949,True,留下,,,流动性
+gtja097,0.749601,True,留下,,,短周期价量
+gtja095,0.748298,True,留下,,,短周期价量
+gtja100,0.690748,False,和 gtja097 太像,gtja097,0.889469,短周期价量
+gtja081,0.543642,False,和 gtja097 太像,gtja097,0.880551,短周期价量
+gtja132,0.527145,False,和 gtja095 太像,gtja095,0.901383,短周期价量
+gtja071,0.525072,True,留下,,,短周期价量
+a158_MA30,0.516443,False,已满 3 个，未比较,,,短周期价量
+gtja088,0.510160,False,已满 3 个，未比较,,,短周期价量
+a158_ROC30,0.491381,False,已满 3 个，未比较,,,短周期价量
+a158_QTLU30,0.487765,False,已满 3 个，未比较,,,短周期价量
+a158_MA60,0.482614,False,已满 3 个，未比较,,,短周期价量
+a158_QTLU60,0.457091,False,已满 3 个，未比较,,,短周期价量
+gtja167,0.441329,False,已满 3 个，未比较,,,短周期价量
+a158_ROC60,0.413785,False,已满 3 个，未比较,,,短周期价量
+gtja187,0.406264,False,已满 3 个，未比较,,,短周期价量
+gtja175,0.397071,False,已满 3 个，未比较,,,短周期价量
+gtja075,0.362627,False,已满 3 个，未比较,,,短周期价量
+gtja161,0.360887,False,已满 3 个，未比较,,,短周期价量
+gtja135,0.309178,False,已满 3 个，未比较,,,短周期价量
+gtja151,0.293232,False,已满 3 个，未比较,,,短周期价量
+a158_MAX60,0.259588,False,已满 3 个，未比较,,,短周期价量
+gtja189,0.248155,False,已满 3 个，未比较,,,短周期价量
+gtja010,0.209421,False,已满 3 个，未比较,,,短周期价量
+gtja126,0.208515,False,已满 3 个，未比较,,,短周期价量
+gtja173,0.177726,False,已满 3 个，未比较,,,短周期价量
+a158_CNTN60,0.158334,False,已满 3 个，未比较,,,短周期价量
+gtja174,0.138471,False,已满 3 个，未比较,,,短周期价量
+gtja153,0.136218,False,已满 3 个，未比较,,,短周期价量
+price_level,0.133677,True,留下,,,规模
+gross_margin_ttm,0.193757,True,留下,,,质量
+roe_ttm,0.192054,True,留下,,,质量
+roa_ttm,0.180540,False,和 roe_ttm 太像,roe_ttm,0.898271,质量
+net_margin_ttm,0.177831,True,留下,,,质量
+asset_growth,0.135214,False,已满 3 个，未比较,,,质量
