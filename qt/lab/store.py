@@ -78,4 +78,6 @@ def load_dev(version_dir: Path, factors: Sequence[str], segments: Sequence[str] 
     dev["factors"] = {f: align(joined(f"factors/{f}")).astype("float32") for f in names}
     dev["flags"] = {name: align(joined(name, "bool")).fillna(False).astype(bool) for name in STORED_FLAGS}
     dev["flags"].update(derived_flags(dev["raw_close"], dev["log_mcap"], dev["factors"][VOL_FACTOR]))
+    if all((version_dir / seg / "div_yield.parquet").exists() for seg in segments):     # 红利税用；没有就不放
+        dev["div_yield"] = align(joined("div_yield")).fillna(0.0)
     return dev

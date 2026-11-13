@@ -99,3 +99,14 @@ def test_distress_flags_ignore_missing_data():
     got = store.distress_flags({"deduct_net_profit_ttm": f(-1, 0, 1, np.nan), "total_equity": f(5, -1, 0, np.nan)})
     assert got["deduct_loss"].iloc[0].tolist() == [True, False, False, False]
     assert got["neg_equity"].iloc[0].tolist() == [False, True, True, False]  # 权益为零也算
+
+
+def test_div_yield_is_loaded_only_when_both_segments_have_it(tmp_path):
+    root = _two(tmp_path)
+    assert "div_yield" not in store.load_dev(root, ["a"])
+    pd.DataFrame(0.01, index=A, columns=["SH600000", "SH600001"]).to_parquet(root / "train" / "div_yield.parquet")
+    assert "div_yield" not in store.load_dev(root, ["a"])                      # 只有一段：不放
+    pd.DataFrame(0.02, index=B, columns=["SH600001", "SH600002"]).to_parquet(root / "valid" / "div_yield.parquet")
+    div = store.load_dev(root, ["a"])["div_yield"]
+    assert div.index.equals(A.append(B)) and list(div.columns) == ["SH600000", "SH600001", "SH600002"]
+    assert div.loc[B[0], "SH600000"] == 0.0 and div.loc[A[0], "SH600000"] == 0.01 and div.loc[B[0], "SH600002"] == 0.02

@@ -175,7 +175,7 @@ def test_every_field_that_changes_the_composite_is_in_the_cache_key():
     other = {"families": {"甲": ["bp", "sue"], "乙": ["ret60"]}, "n_hold": 30, "rebalance_every": 10, "sell_mult": 2,
              "exclude": ["is_st"], "no_buy": [], "exit_next_day": True, "stop_loss": 0.2, "cost_multiplier": 2.0,
              "missing": "zero", "blend": "rank", "overlay": "value_trend", "overlay_low": 0.2, "overlay_high": 0.85,
-             "cash_yield": 0.02}
+             "cash_yield": 0.02, "dividend_tax": True}
     fields = [f.name for f in dataclasses.fields(pc.Procedure)]
     assert set(other) == set(fields), "给新字段补一个不同的取值"
     base = pc.composite(dev, pc.PLAN3D)
@@ -271,3 +271,20 @@ def test_overlay_uses_the_procedures_own_range():
     dev["overlay_signals"] = _signals(dev, 0.0, 0.0)                           # 最贵、趋势向下 → 下限
     res = pc.run(dev, pc.PLAN3D.replace(overlay="value_trend", overlay_low=0.10, overlay_high=0.90))
     assert res.daily["n_holdings"].iloc[25:].median() == 2                     # round(15 × 0.10 ÷ 0.90) = 2
+
+
+def test_dividend_tax_switch_passes_dividends_to_the_engine():
+    dev, _ = dev3d()
+    div = dev["close"] * 0.0
+    div.iloc[100:, :] = 0.0
+    div.iloc[100, :] = 0.03                                                    # 第 100 天每只都分红 3%
+    dev["div_yield"] = div
+    on = pc.run(dev, pc.PLAN3D.replace(dividend_tax=True))
+    off = pc.run(dev, pc.PLAN3D)
+    assert on.daily["tax"].iloc[100] > 0 and on.daily["tax"].drop(index=dev["close"].index[100]).sum() == 0
+    assert off.daily["tax"].sum() == 0
+    assert pc.rules(pc.PLAN3D.replace(dividend_tax=True)).dividend_tax
+    shifted = pc.run(dev, pc.PLAN3D.replace(dividend_tax=True), offset=5)      # 错开起点后仍在同一天扣
+    assert shifted.daily["tax"].loc[dev["close"].index[100]] > 0
+    with pytest.raises(KeyError, match="div_yield"):
+        pc.run({k: v for k, v in dev.items() if k != "div_yield"}, pc.PLAN3D.replace(dividend_tax=True))

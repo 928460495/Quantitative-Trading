@@ -42,6 +42,7 @@ class Procedure:
     overlay_low: float = 0.25                                   # 估值 + 趋势的股票比例下限、上限
     overlay_high: float = 0.75
     cash_yield: float = 0.0                                     # 现金年化利息
+    dividend_tax: bool = False                                  # 扣红利税（要 dev["div_yield"]）
 
     def __post_init__(self):
         # 规范写法：族按名字排、排除名单去重排序。这样写进文件再读回来、或者字典顺序不同，都还是同一个流程
@@ -130,6 +131,11 @@ def market(dev: dict, proc: Procedure, offset: int = 0, cache: dict | None = Non
     cut = lambda x: x.iloc[offset:]
     data = _market_data(cut(score.mask(drop)), cut(dev["close"]), cut(dev["raw_close"]), cut(can_buy),
                         cut(dev["can_sell"]), cut(dev["industry"]))
+    if proc.dividend_tax:
+        if "div_yield" not in dev:
+            raise KeyError("扣红利税需要 dev['div_yield']（scripts/lab_build_flags.py 生成）")
+        div = cut(dev["div_yield"]).reindex(index=data.dates, columns=data.instruments).fillna(0.0)
+        data = dataclasses.replace(data, div_yield=div.to_numpy(dtype=float, copy=True))
     if proc.exit_next_day:
         force = drop.reindex(index=data.dates, columns=data.instruments).fillna(False).to_numpy(dtype=bool)
         data = dataclasses.replace(data, force_exit=force)
@@ -142,7 +148,7 @@ def rules(proc: Procedure) -> AccountRules:
                         drawdown_stop=None, drawdown_tiers=None, cost_multiplier=proc.cost_multiplier,
                         rebalance_every=proc.rebalance_every, min_trade=MIN_TRADE,
                         slot_budget=None if proc.overlay == "none" else proc.overlay_high / proc.n_hold,
-                        cash_yield=proc.cash_yield)
+                        cash_yield=proc.cash_yield, dividend_tax=proc.dividend_tax)
 
 
 def exposure(dev: dict, proc: Procedure, dates: pd.DatetimeIndex) -> pd.Series | None:
