@@ -37,3 +37,16 @@
 **4b 封存段已用掉**：`qt/config.TEST_SEGMENT_SPENT = True`（最终测试做完），读 2022 年以后的数据不再需要解锁；测试里默认仍按"锁着"跑（conftest 统一设成 False），专门的测试检查放开后的行为。新加一段 `live`：从 2026-10-26（最终测试窗口之后）到两份数据共同的最后一天，因子、标记和开发段用同一套脚本生成（`--segment live`）。
 **5 纸面账户 = 回测引擎本身**：每次都从跟单开始日起，用 `qt/lab/procedure.run` 在 live 段上重跑账户（T 日信号、T+1 收盘成交，成本、红利税都和回测一样）。这样账面和回测不可能对不上。每个调仓日用出单程序出清单，清单原样追加到 `data/live/orders_log.jsonl`；以后重跑时检查回测的成交和当时出的清单是否一致（数据被修订时会暴露出来）。每次运行都按停止规则①（回撤 −54%）、②（满 24 个月后 t < −1）检查并写进报告。
 **一键脚本** `scripts/paper_day.py`：读 live 段 → 重跑纸面账户 → 写 `data/live/` 下的净值、成交、当天清单、检查结果 → 打印摘要。
+
+## 进度（2026-11-13 晚）
+
+- 任务 4a、4b、5 的代码完成（增量采集、live 段、纸面账户 `scripts/paper_day.py`），测试全过
+- 第一次更新数据失败：baostock 登录返回"10001011 黑名单用户"（多半是之前整批下载请求太多），没有下载任何东西。**用户决定：等几天再试**，不换数据源（换源要重新核对换手率、估值、ST 的口径）
+- 工作目录里加了 `data/raw → ~/qt-full-a/data/raw` 的链接（不进仓库），采集脚本默认路径就能找到原有数据
+
+解封后按顺序运行（单进程）：
+1. `python scripts/collect_full_a.py --part update`（日线补最新几天、重取最近两期财务、指数、检查、打包）
+2. `python scripts/download_full_a.py --archive data/full_a_<日期>.tar`
+3. `python scripts/download_data.py`（最新的 Qlib 数据包）
+4. `python scripts/build_pool.py --segment live`，再 `python scripts/build_plan3d_flags.py live`、`python scripts/lab_build_flags.py live`
+5. 第一次：`python scripts/paper_day.py --start <数据里最新的一天>`；以后每个交易日数据更新后 `python scripts/paper_day.py`
