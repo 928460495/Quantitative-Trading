@@ -1,0 +1,27 @@
+id: H004
+parent: H002
+family: 因子族
+kind: 收益型
+mechanism: >-
+  "便宜"组现在用三个口径：扣非市盈率倒数（ep_deduct）、市净率倒数（bp）、市销率倒数（sp_ttm）。后两个口径不管公司赚不赚钱：
+  按净资产或销售额算很便宜的，常常是不赚钱、资产质量差的公司，也就是价值陷阱（Novy-Marx 2013 "The Quality Dimension of
+  Value Investing"：账面市值比和盈利能力负相关，单看便宜分不清便宜得有没有道理；Penman & Reggiani 2018：高账面市值比买到的是
+  有风险的盈利增长）。Liu, Stambaugh & Yuan（2019, JFE）在中国专门比较过，市盈率口径的价值包含了账面市值比等其他口径的信息，
+  CH-3 模型的价值因子只用 EP。所以"便宜"只用盈利口径（扣非市盈率倒数），把"便宜但不赚钱"的公司从顶端拿掉。
+change: "\"便宜\"组只留 ep_deduct，去掉 bp、sp_ttm；三组等权不变"
+prediction:
+  metric: 配对.全段
+  direction: 升
+falsification: >-
+  全段配对差值的 t 值低于 2；或者阶段三的差值不为正；或者阶段一、二的差值都不为正；或者成本翻倍后全段差值不为正；
+  或者大亏只数明显变多
+variant:
+  families:
+    业绩超预期: [sue]
+    便宜: [ep_deduct]
+    冷门: [turn_12m, gtja100, gtja081, gtja132]
+seen_before: >-
+  没有单独看过 bp、sp_ttm、ep_deduct 在开发段的多头端表现（先登记再看）。看过 E003 里"便宜"三个口径合在一起的结果
+  （阶段三最好五分之一 −2.1 个点），看过 H001–H003 的结果。更早，计划 3c 的两因子版本（ep_deduct + turn_12m）在 2019–2021
+  没有踩雷，这是写这张卡的线索之一。开发段上的结果只能说明机制有没有起作用，不算样本外证据。
+status: 已登记
