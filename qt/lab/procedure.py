@@ -20,6 +20,7 @@ from qt.wide_eval import _market_data, neutralize, zscore
 
 MAX_STOCK_WEIGHT, MAX_INDUSTRY_WEIGHT, MIN_TRADE, COOLDOWN_DAYS = 0.20, 0.30, 2000.0, 20
 MISSING = ("skip", "zero")
+BLENDS = ("z", "rank")
 
 
 @dataclass(frozen=True)
@@ -34,6 +35,7 @@ class Procedure:
     stop_loss: float | None = None
     cost_multiplier: float = 1.0
     missing: str = "skip"                                       # 某组分数缺失：skip 只平均有的组；zero 按 0（截面平均）计入
+    blend: str = "z"                                            # 族间合成：z 平均各组标准分；rank 平均各组百分位排名（居中到 ±0.5）
 
     def __post_init__(self):
         # 规范写法：族按名字排、排除名单去重排序。这样写进文件再读回来、或者字典顺序不同，都还是同一个流程
@@ -42,6 +44,8 @@ class Procedure:
         object.__setattr__(self, "no_buy", tuple(sorted(set(self.no_buy))))
         if self.missing not in MISSING:
             raise ValueError(f"missing 只能是 {MISSING}：{self.missing}")
+        if self.blend not in BLENDS:
+            raise ValueError(f"blend 只能是 {BLENDS}：{self.blend}")
 
     def factors(self) -> tuple[str, ...]:
         return tuple(f for _, fs in self.families for f in fs)
@@ -76,9 +80,13 @@ def composite(dev: dict, proc: Procedure) -> pd.DataFrame:
     """族内等权 → 每族标准化 → 族间等权 → 对行业和市值中性化 → 标准化。"""
     group_of = {f: name for name, fs in proc.families for f in fs}
     scores = {f: dev["factors"][f] for f in group_of}
-    if proc.missing == "skip":
+    if proc.missing == "skip" and proc.blend == "z":
         return neutral_composite(scores, group_of, dev["industry"], dev["log_mcap"])
     cats = category_scores(scores, group_of)
+    if proc.blend == "rank":                                                # 百分位排名居中到 (−0.5, 0.5]，极端值的影响有上限
+        cats = {g: c.rank(axis=1, pct=True) - 0.5 for g, c in cats.items()}
+    if proc.missing == "skip":
+        return zscore(neutralize(blend(cats), dev["industry"], dev["log_mcap"], size=True))
     present = reduce(operator.or_, [c.notna() for c in cats.values()])
     cats = {g: c.fillna(0.0).where(present) for g, c in cats.items()}       # 至少有一组的股票：缺的组记 0
     return zscore(neutralize(blend(cats), dev["industry"], dev["log_mcap"], size=True))
@@ -93,7 +101,7 @@ def _any(dev: dict, names: tuple[str, ...], like: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-SCORE_FIELDS = ("families", "missing")      # 决定合成分的字段；加了新的影响合成分的字段，必须加进这里
+SCORE_FIELDS = ("families", "missing", "blend")      # 决定合成分的字段；加了新的影响合成分的字段，必须加进这里
 
 
 def score_key(proc: Procedure) -> tuple:

@@ -174,7 +174,7 @@ def test_every_field_that_changes_the_composite_is_in_the_cache_key():
     dev["factors"]["sue"][dev["close"].columns[:20]] = np.nan
     other = {"families": {"甲": ["bp", "sue"], "乙": ["ret60"]}, "n_hold": 30, "rebalance_every": 10, "sell_mult": 2,
              "exclude": ["is_st"], "no_buy": [], "exit_next_day": True, "stop_loss": 0.2, "cost_multiplier": 2.0,
-             "missing": "zero"}
+             "missing": "zero", "blend": "rank"}
     fields = [f.name for f in dataclasses.fields(pc.Procedure)]
     assert set(other) == set(fields), "给新字段补一个不同的取值"
     base = pc.composite(dev, pc.PLAN3D)
@@ -182,3 +182,45 @@ def test_every_field_that_changes_the_composite_is_in_the_cache_key():
         changed = pc.composite(dev, pc.PLAN3D.replace(**{name: other[name]}))
         moves = not changed.equals(base)
         assert moves == (name in pc.SCORE_FIELDS), name
+
+
+# ---------- 族间合成：平均标准分还是平均百分位排名（H005） ----------
+
+def test_rank_blend_limits_how_far_one_extreme_family_can_lift_a_stock():
+    dev, _ = dev3d()
+    cols = dev["close"].columns
+    star = cols[7]
+    for f in ("ep_deduct", "bp", "sp_ttm"):                                   # "便宜"这一组极端
+        dev["factors"][f] = dev["factors"][f].copy()
+        dev["factors"][f][star] = 40.0
+    for f in pc.PLAN3D.factors():
+        if f not in ("ep_deduct", "bp", "sp_ttm"):
+            dev["factors"][f] = dev["factors"][f].copy()
+            dev["factors"][f][star] = -0.5                                    # 其他组都略低于平均
+    assert pc.PLAN3D.blend == "z"
+    z = pc.composite(dev, pc.PLAN3D)
+    r = pc.composite(dev, pc.PLAN3D.replace(blend="rank"))
+    rank_z = z.rank(axis=1, ascending=False)[star].median()
+    rank_r = r.rank(axis=1, ascending=False)[star].median()
+    assert rank_z <= 3 and rank_r > 10                                         # 标准分相加时冲到最前面；排名平均时不会
+    assert z.notna().equals(r.notna())
+    others = [c for c in cols if c != star]
+    assert np.corrcoef(z[others].stack(), r[others].stack())[0, 1] > 0.85      # 正常的股票排序大体一致（实测约 0.89）
+
+
+def test_rank_blend_treats_missing_family_like_the_missing_option():
+    dev, _ = dev3d()
+    cols = dev["close"].columns
+    dev["factors"]["sue"] = dev["factors"]["sue"].copy()
+    dev["factors"]["sue"][cols[:10]] = np.nan
+    skip = pc.composite(dev, pc.PLAN3D.replace(blend="rank", missing="skip"))
+    zero = pc.composite(dev, pc.PLAN3D.replace(blend="rank", missing="zero"))
+    assert not skip.equals(zero) and skip.notna().equals(zero.notna())
+    miss = list(cols[:10])
+    assert zero[miss].abs().mean().mean() < skip[miss].abs().mean().mean()     # 缺的那组按中间排名计入，向 0 收
+
+
+def test_blend_option_is_validated():
+    with pytest.raises(ValueError, match="blend"):
+        pc.PLAN3D.replace(blend="max")
+    assert pc.Procedure.from_dict(pc.PLAN3D.replace(blend="rank").to_dict()).blend == "rank"
