@@ -53,10 +53,11 @@ def lot_feasibility(raw_close: pd.DataFrame, can_buy: pd.DataFrame, nav: float, 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--segment", choices=["train", "valid", "both"], default="both")
+    ap.add_argument("--segment", choices=["train", "valid", "test", "both"], default="both",
+                    help="test：封存段，只在用户批准的最终测试前用 QT_UNLOCK_TEST=1 生成")
     args = ap.parse_args()
 
-    from qt.config import segment
+    from qt.config import parse_segments, segment_range
     from qt.formula import evaluate
     from qt.full_a import load_index
     from qt.library import all_factors
@@ -66,8 +67,8 @@ def main() -> None:
     pool = read_pool()
     defs = {f.name: f for f in all_factors()}
     stop = False
-    for seg in (["train", "valid"] if args.segment == "both" else [args.segment]):
-        start, end = segment(seg)
+    for seg in parse_segments(args.segment):
+        start, end = segment_range(seg)
         warm = warmup_start(start)
         print(f"== {seg}：{start} ~ {end}（从 {warm} 开始算），{len(pool)} 个因子", flush=True)
         panel, ctx, codes, version = load_context(start, end, 1, warmup=warm, tail=0)

@@ -53,3 +53,23 @@ def test_drop_embargo_rejects_short_sample():
     idx = pd.MultiIndex.from_product([pd.bdate_range("2020-01-01", periods=2), ["A"]], names=["datetime", "instrument"])
     with pytest.raises(ValueError):
         drop_embargo(pd.DataFrame({"x": [1, 2]}, index=idx), 3)
+
+
+def test_segment_range_gives_concrete_end_for_test(monkeypatch):
+    from qt.config import FINAL_TEST_END, segment_range
+    assert segment_range("valid") == ("2019-01-01", "2021-12-31")
+    with pytest.raises(TestSegmentLockedError):
+        segment_range("test")
+    monkeypatch.setenv("QT_UNLOCK_TEST", "1")
+    assert segment_range("test") == ("2022-01-01", FINAL_TEST_END) and FINAL_TEST_END == "2026-10-23"
+
+
+def test_parse_segments(monkeypatch):
+    from qt.config import parse_segments
+    assert parse_segments("both") == ["train", "valid"] and parse_segments("valid") == ["valid"]
+    with pytest.raises(TestSegmentLockedError):
+        parse_segments("test")
+    with pytest.raises(KeyError):
+        parse_segments("all")
+    monkeypatch.setenv("QT_UNLOCK_TEST", "1")
+    assert parse_segments("test") == ["test"]

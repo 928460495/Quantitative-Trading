@@ -1,7 +1,8 @@
 """计划 3d 任务 3：给 data/cache/pool/<版本>/<段>/ 补两张"日期 × 股票"的布尔表。
 
 用法（先跑过 scripts/build_pool.py；单进程，几分钟）：
-    python scripts/build_plan3d_flags.py
+    python scripts/build_plan3d_flags.py                 # 训练段和验证段
+    QT_UNLOCK_TEST=1 python scripts/build_plan3d_flags.py test   # 封存段：只在用户批准的最终测试前
 
     is_st.parquet        当天是不是 ST、*ST（baostock 日线 isST；缺记录的日子沿用上一个已知状态）
     loss_small.parquet   亏损且营业收入低于当时有效的退市门槛（滚动四季，按公告日对齐；门槛见 qt/plan3d.revenue_floor）
@@ -51,12 +52,13 @@ def yearly_share(flag: pd.DataFrame, can_buy: pd.DataFrame) -> pd.Series:
 
 
 def main() -> None:
+    from qt.config import parse_segments
     from qt.full_a import load_daily
     from qt.panel import load_fundamentals
     from run_plan3c_train import POOL_CACHE, latest_version
 
     version = latest_version(POOL_CACHE)
-    for seg in ("train", "valid"):
+    for seg in parse_segments(sys.argv[1] if len(sys.argv) > 1 else "both"):
         seg_dir = version / seg
         close = pd.read_parquet(seg_dir / "close.parquet")
         can_buy = pd.read_parquet(seg_dir / "can_buy.parquet")
