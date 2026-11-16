@@ -59,18 +59,24 @@ def make_orders(data: MarketData, rules: AccountRules, exposure: pd.Series | Non
     row = lambda a: pd.Series(a[s], index=data.instruments)
     price = row(data.raw_close)
     values = {c: p["shares"] * float(raw_marks.get(c, np.nan)) for c, p in state.positions.items()}
-    orders = plan_orders(score=row(data.score), can_buy=row(data.can_buy), can_sell=row(data.can_sell),
+    score, can_buy = row(data.score), row(data.can_buy)
+    orders = plan_orders(score=score, can_buy=can_buy, can_sell=row(data.can_sell),
                          industry=None if data.industry is None else row(data.industry), tradable=price.notna(),
                          holdings=values, cash=state.cash, price=price, slot_limit=slot_limit, rebalance=rebalance,
                          rules=rules, date=dates[s])
+    taken = set(state.positions) | {b.code for b in orders.buys}
+    ranked = score[can_buy.astype(bool) & price.notna() & score.notna()].sort_values(ascending=False, kind="stable")
+    backups = [c for c in ranked.index if c not in taken][:N_BACKUPS] if rebalance and orders.buys else []
     meta = {"signal_date": str(dates[s].date()), "rebalance": rebalance, "slot_limit": slot_limit, "cash": state.cash,
-            "n_held": len(state.positions), "nav_estimate": state.cash + float(np.nansum(list(values.values())))}
+            "n_held": len(state.positions), "n_can_buy": int(can_buy.astype(bool).sum()), "backups": backups, "nav_estimate": state.cash + float(np.nansum(list(values.values())))}
     return orders, meta
 
 
-def check_orders(orders: Orders, held: dict[str, int], slot_limit: int) -> list[str]:
-    """出单前的安全检查；返回发现的问题（空表示通过）。held：代码 → 现有股数。"""
+def check_orders(orders: Orders, held: dict[str, int], slot_limit: int, n_can_buy: int | None = None) -> list[str]:
+    """出单前的安全检查；返回发现的问题（空表示通过）。held：代码 → 现有股数；n_can_buy：信号日能买的股票数。"""
     problems = []
+    if n_can_buy == 0:
+        problems.append("信号日一只能买的股票都没有：多半是数据问题（比如缺下一个交易日的状态）")
     if orders.cash_after < 0:
         problems.append(f"买入总额超过现金加卖出所得：按参考价算差 {-orders.cash_after:.2f} 元")
     for b in orders.buys:
@@ -86,6 +92,7 @@ def check_orders(orders: Orders, held: dict[str, int], slot_limit: int) -> list[
     return problems
 
 
+N_BACKUPS = 5
 REASONS = {"rank": "跌出排名", "exposure": "降仓位", "buy": "买入"}
 
 
@@ -112,6 +119,10 @@ def write_sheet(orders: Orders, meta: dict, problems: list[str], out_dir: Path, 
              "- 先卖后买；卖出按全部持股卖；买入股数按信号日收盘价（参考价）算，成交价不同时按实际资金调整", "",
              "## 安全检查", "", *(["- 通过"] if not problems else [f"- **{p}**" for p in problems]), "",
              "## 清单", "", show.to_markdown(index=False) if len(show) else "（今天没有要做的买卖）", ""]
+    if meta.get("backups"):
+        lines += ["## 备选（按顺序）", "", "、".join(meta["backups"]), "",
+                  "- 清单里要买的股票，成交日停牌、涨停买不进、或当天被 ST：跳过，按顺序用备选补，金额和被跳过的那只相同",
+                  "- 要卖的股票停牌或跌停卖不出：留着，下一个调仓日再处理", ""]
     path = out_dir / f"{stem}.md"
     path.write_text("\n".join(lines), encoding="utf-8")
     return path

@@ -71,7 +71,7 @@ def main() -> None:
         start, end = segment_range(seg)
         warm = warmup_start(start)
         print(f"== {seg}：{start} ~ {end}（从 {warm} 开始算），{len(pool)} 个因子", flush=True)
-        panel, ctx, codes, version = load_context(start, end, 1, warmup=warm, tail=0)
+        panel, ctx, codes, version = load_context(start, end, 1, warmup=warm, tail=0, provisional_last=seg == "live")
 
         def compute(name: str) -> pd.DataFrame:
             f = defs[name]

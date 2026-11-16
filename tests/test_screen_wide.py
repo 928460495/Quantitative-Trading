@@ -229,3 +229,16 @@ def test_factor_score_is_daily_version_of_screen_score():
     daily = sw.factor_score(-fwd, "动量/反转", -1, ctx)
     assert daily.index.equals(ctx.dates)
     pd.testing.assert_frame_equal(daily.loc[ctx.dates[::5]].astype("float32"), sw.screen_score(-fwd, "动量/反转", -1, ctx))
+
+
+def test_wide_masks_pass_provisional_last():
+    idx = pd.bdate_range("2012-03-01", periods=5)
+    cols = [f"SH600{i:03d}" for i in range(10)]
+    amount = pd.DataFrame(np.arange(50, dtype=float).reshape(5, 10) + 1e6, index=idx, columns=cols)
+    long_idx = pd.MultiIndex.from_product([idx, cols], names=["datetime", "instrument"])
+    daily = pd.DataFrame({"preclose": 10.0, "close": 10.0, "tradestatus": 1, "isST": 0}, index=long_idx)
+    listed = pd.Series(pd.Timestamp("2005-01-04"), index=cols)
+    buy, sell = sw.wide_masks(amount, daily, listed)
+    assert not buy.iloc[-1].any() and not sell.iloc[-1].any()
+    buy, sell = sw.wide_masks(amount, daily, listed, provisional_last=True)
+    assert buy.iloc[-1].sum() == 8 and sell.iloc[-1].all() and buy.iloc[-2].sum() == 8

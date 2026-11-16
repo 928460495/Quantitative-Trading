@@ -80,3 +80,14 @@ def test_start_must_be_latest_day(full, tmp_path):
     d = full["close"].index
     with pytest.raises(ValueError, match="最新"):
         pd_.run_day(_cut(full, d[30]), PROC, tmp_path, start=d[29])
+
+
+def test_latest_day_without_buyable_stocks_is_flagged(full, tmp_path):
+    """最新一天的能买标记全是 False（缺下一天的数据时就是这样）：不能悄悄出一张空清单。"""
+    d = full["close"].index
+    dev = _cut(full, d[30])
+    dev["can_buy"] = dev["can_buy"].copy()
+    dev["can_buy"].iloc[-1] = False
+    out = pd_.run_day(dev, PROC, tmp_path, start=d[30])
+    assert out["n_buys"] == 0 and any("能买" in p for p in out["sheet_problems"])
+    assert "不交易" in Path(out["report"]).read_text()

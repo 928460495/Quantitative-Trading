@@ -38,7 +38,7 @@ def run(dev: dict, proc: pc.Procedure, state: State, signal_date: pd.Timestamp, 
     data = pc.market(dev, proc, dates.get_loc(state.anchor))          # 从开始日起算，和回测的错开起点一样
     orders, meta = make_orders(data, pc.rules(proc), pc.exposure(dev, proc, data.dates), state, signal_date)
     held = {c: p["shares"] for c, p in state.positions.items()}
-    problems = check_orders(orders, held, meta["slot_limit"])
+    problems = check_orders(orders, held, meta["slot_limit"], meta["n_can_buy"])
     return write_sheet(orders, meta, problems, out_dir, held), problems, orders
 
 

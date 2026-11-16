@@ -187,16 +187,18 @@ def screen_score(raw: pd.DataFrame, category: str, direction: int, ctx: ScreenCo
     return _sample(_neutral(raw, category, ctx) * direction, ctx)
 
 
-def wide_masks(amount: pd.DataFrame, daily: pd.DataFrame, listed: pd.Series) -> tuple[pd.DataFrame, pd.DataFrame]:
+def wide_masks(amount: pd.DataFrame, daily: pd.DataFrame, listed: pd.Series, provisional_last: bool = False
+               ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """qt.universe.full_a_masks 的宽表版本：(能买, 能卖)，信号日 T 对齐。
 
     amount 是 Qlib 成交额宽表；"_amount20" 同 Qlib 的 Mean($amount,20)（不足 20 天用已有的天数）。
     daily 是 load_daily(["preclose", "close", "tradestatus", "isST"])，要覆盖到最后一天的下一个交易日。
+    provisional_last：见 full_a_masks（实盘出单时最新一天用当天的状态）。
     """
     from qt.universe import full_a_masks
 
     a20 = amount.rolling(20, min_periods=1).mean().stack(future_stack=True)
     a20.index.names = ["datetime", "instrument"]
-    buy, sell = full_a_masks(pd.DataFrame({"_amount20": a20}), daily, listed)
+    buy, sell = full_a_masks(pd.DataFrame({"_amount20": a20}), daily, listed, provisional_last=provisional_last)
     unstack = lambda s: s.unstack("instrument").reindex(index=amount.index, columns=amount.columns).fillna(False).astype(bool)
     return unstack(buy), unstack(sell)

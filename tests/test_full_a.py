@@ -115,3 +115,49 @@ def test_liquidity_cut_ranked_within_main_board():
     can_buy, _ = _setup([(c, 10.0, 10.1, 1, 0) for c in main + chinext],
                         amount20=[100.0, 200.0, 300.0, 400.0, 500.0] + [1.0] * 5)
     assert list(can_buy[:5]) == [False, True, True, True, True]
+
+
+# ---- 最新一天（没有下一个交易日的数据）：DECISIONS 2026-11-17 ----
+
+def _latest(rows, provisional=True, codes=("SH600000", "SH600001", "SH600002", "SH600003", "SH600004", "SH600005")):
+    """rows：(日期, 股票, preclose, close, tradestatus, isST)。信号日 2021-03-01 和 2021-03-02，数据到 03-02 为止。"""
+    t, t1 = pd.Timestamp("2021-03-01"), pd.Timestamp("2021-03-02")
+    df = pd.DataFrame({"_amount20": [float(i + 1) for i in range(len(codes))] * 2},
+                      index=pd.MultiIndex.from_product([[t, t1], list(codes)], names=["datetime", "instrument"]))
+    base = {(d, c): (10.0, 10.0, 1, 0) for d in (t, t1) for c in codes}
+    for d, c, *v in rows:
+        if v == [None]:
+            base.pop((pd.Timestamp(d), c))
+        else:
+            base[(pd.Timestamp(d), c)] = tuple(v)
+    daily = pd.DataFrame([(d, c, *v) for (d, c), v in base.items()],
+                         columns=["datetime", "instrument", "preclose", "close", "tradestatus", "isST"])
+    daily = daily.set_index(["datetime", "instrument"]).sort_index()
+    listed = pd.Series(pd.Timestamp("2000-01-04"), index=list(codes))
+    buy, sell = full_a_masks(df, daily, listed, provisional_last=provisional)
+    return buy.unstack("instrument"), sell.unstack("instrument"), t, t1
+
+
+def test_latest_day_all_false_by_default():
+    buy, sell, t, t1 = _latest([])
+    buy0, sell0, _, _ = _latest([], provisional=False)
+    assert not buy0.loc[t1].any() and not sell0.loc[t1].any()
+    assert buy.loc[t].equals(buy0.loc[t]) and sell.loc[t].equals(sell0.loc[t])   # 有下一天的日期不变
+
+
+def test_latest_day_uses_same_day_status():
+    buy, sell, t, t1 = _latest([("2021-03-02", "SH600002", 10.0, 10.0, 0, 0),      # 当天停牌
+                                ("2021-03-02", "SH600003", 10.0, 10.0, 1, 1),      # 当天 ST
+                                ("2021-03-02", "SH600004", 10.0, 11.0, 1, 0),      # 当天涨停：明天未必，不排除
+                                ("2021-03-02", "SH600005", 10.0, 9.0, 1, 0),       # 当天跌停：同上
+                                ("2021-03-02", "SH600001", None)])                 # 当天没有记录 = 停牌
+    assert buy.loc[t1].to_dict() == {"SH600000": False, "SH600001": False, "SH600002": False, "SH600003": False,
+                                     "SH600004": True, "SH600005": True}           # SH600000、01 流动性最差 20%
+    assert sell.loc[t1].to_dict() == {"SH600000": True, "SH600001": False, "SH600002": False, "SH600003": True,
+                                      "SH600004": True, "SH600005": True}
+
+
+def test_latest_day_keeps_static_rules():
+    codes = ("SH600000", "SH600001", "SZ300001", "SH600003", "SH600004", "SH600005")
+    buy, _, _, t1 = _latest([], codes=codes)
+    assert not buy.loc[t1, "SZ300001"] and buy.loc[t1, "SH600005"]

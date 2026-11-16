@@ -64,11 +64,15 @@ def is_main_board(instruments: pd.Index) -> np.ndarray:
     return np.asarray(pd.Index(instruments).str.startswith(MAIN_BOARD_PREFIXES), dtype=bool)
 
 
-def full_a_masks(df: pd.DataFrame, daily: pd.DataFrame, listed: pd.Series) -> tuple[pd.Series, pd.Series]:
+def full_a_masks(df: pd.DataFrame, daily: pd.DataFrame, listed: pd.Series, provisional_last: bool = False
+                 ) -> tuple[pd.Series, pd.Series]:
     """信号日 T 的 (能买, 能卖)，索引同 df。
 
     df 需要 "_amount20"（Mean($amount,20)）；daily 是 load_daily(["preclose", "close", "tradestatus", "isST"])，
     要覆盖到 df 最后一天的下一个交易日。入场日（T+1）在 daily 里没有记录的，按停牌处理。
+
+    provisional_last（只给实盘出单用，DECISIONS 2026-11-17）：没有下一个交易日的那一天，改用 T 日自己的
+    停牌和 ST 状态；涨跌停不参与（T+1 的事先不知道，那一天入场日的价格是空的，本来就不会标）。不开时那一天全是 False。有下一天的日期不受影响。
     """
     dates = df.index.get_level_values("datetime")
     codes = df.index.get_level_values("instrument")
@@ -80,6 +84,11 @@ def full_a_masks(df: pd.DataFrame, daily: pd.DataFrame, listed: pd.Series) -> tu
 
     pct = limit_pct(codes, entry_dates, entry["isST"].fillna(0))
     at_up, at_down = limit_flags(entry["close"], entry["preclose"], pct)
+    no_next = np.asarray(entry_dates.isna())
+    if provisional_last and no_next.any():
+        today = daily.reindex(df.index[no_next])
+        entry = entry.copy()
+        entry.loc[no_next, ["tradestatus", "isST"]] = today[["tradestatus", "isST"]].to_numpy()
     trading = entry["tradestatus"] == 1
 
     seasoned = (dates - pd.DatetimeIndex(codes.map(listed))).days >= MIN_LISTED_DAYS

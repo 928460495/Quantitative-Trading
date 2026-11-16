@@ -101,3 +101,43 @@ def test_state_from_backtest_is_end_of_day():
     assert (res.trades["date"] == data.dates[41]).any()
     assert st.cash == float(res.daily["cash"].iloc[41])
     assert len(st.positions) == int(res.daily["n_holdings"].iloc[41])
+
+
+# ---- 最新一天：备选名单、没有能买的股票要报问题（DECISIONS 2026-11-17） ----
+
+def test_backups_are_next_ranked_buyable_not_bought_not_held():
+    data = _market(5)
+    s = 40
+    data.can_buy[s] &= ~np.isnan(data.raw_close[s])
+    res = run_account(data, RULES)
+    state = state_from_backtest(res, data, s, anchor=data.dates[0])
+    orders, meta = make_orders(data, RULES, None, state, data.dates[s])
+    bought, held = {b.code for b in orders.buys}, set(state.positions)
+    assert orders.buys and len(meta["backups"]) == 5 and meta["n_can_buy"] == int(data.can_buy[s].sum())
+    score = pd.Series(data.score[s], index=data.instruments)
+    ok = pd.Series(data.can_buy[s], index=data.instruments) & score.notna()
+    want = [c for c in score[ok].sort_values(ascending=False, kind="stable").index if c not in bought | held]
+    assert meta["backups"] == want[:5]
+
+
+def test_no_backups_when_not_rebalance_day():
+    data = _market(5)
+    res = run_account(data, RULES)
+    state = state_from_backtest(res, data, 41, anchor=data.dates[0])
+    _, meta = make_orders(data, RULES, None, state, data.dates[41])
+    assert meta["backups"] == []
+
+
+def test_nothing_buyable_is_a_problem():
+    assert any("能买" in p for p in check_orders(_orders(buys=[]), {"SH600003": 100}, slot_limit=2, n_can_buy=0))
+    assert check_orders(_orders(), {"SH600003": 100, "SH600004": 100}, slot_limit=2, n_can_buy=3) == []
+
+
+def test_sheet_lists_backups_and_rule(tmp_path):
+    meta = {"signal_date": "2021-06-01", "rebalance": True, "slot_limit": 2, "cash": 5000.0,
+            "backups": ["SH600007", "SH600008"]}
+    write_sheet(_orders(), meta, [], tmp_path, held={"SH600003": 700})
+    md = (tmp_path / "orders-2021-06-01.md").read_text()
+    assert "备选" in md and md.index("SH600007") < md.index("SH600008") and "涨停" in md
+    write_sheet(_orders(), {**meta, "backups": []}, [], tmp_path, held={"SH600003": 700})
+    assert "备选" not in (tmp_path / "orders-2021-06-01.md").read_text()

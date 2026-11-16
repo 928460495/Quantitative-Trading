@@ -50,3 +50,13 @@
 3. `python scripts/download_data.py`（最新的 Qlib 数据包）
 4. `python scripts/build_pool.py --segment live`，再 `python scripts/build_plan3d_flags.py live`、`python scripts/lab_build_flags.py live`
 5. 第一次：`python scripts/paper_day.py --start <数据里最新的一天>`；以后每个交易日数据更新后 `python scripts/paper_day.py`
+
+## 进度（2026-11-17）：数据接上，纸面跟单从 2026-11-16 开始
+
+- baostock 解封，增量采集一次跑完（5229 只补到 2026-11-16，失败 0 只）；全 A 数据包 `local-20261117`，Qlib 数据包 2026-11-16（和旧包在重叠历史上一致）。旧 Qlib 包留在 `~/.qlib/qlib_data/cn_data_20261025_backup`
+- **换 Qlib 包的做法改了**：`download_data.py --force` 是先删后下，断网会两头落空。改成 `python scripts/download_data.py --tag <版本> --target ~/.qlib/qlib_data/cn_data_<日期>`，核对后把旧目录改名、新目录改成 `cn_data`
+- **发现并修了一个漏洞**（DECISIONS 2026-11-17）：最新一天没有下一个交易日的数据，"能买"全是 False，第一张清单是空的。现在 live 段最新一天用当天的停牌、ST 状态；清单多了 5 只备选和顺延规则；安全检查会拦住"一只能买的都没有"
+- 第一张清单：信号日 2026-11-16，买 15 只，约 9.3 万元，剩现金约 6770 元。文件在 `data/live/paper/`（不进仓库）
+- 已知的小问题：清单存档核对把"因为 T+1 停牌、涨停换成备选"的差别也报成"对不上"，要人看一眼；备选没有再检查行业上限
+
+每个交易日收盘后（数据源更新一般在晚上）按顺序运行：上面的第 1、2 步 → 换 Qlib 包（新做法）→ 第 4 步 → `python scripts/paper_day.py`。

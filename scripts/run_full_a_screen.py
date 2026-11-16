@@ -250,8 +250,10 @@ def trial_logger(data_version: str, path: Path = TRIALS_FILE) -> Callable[[dict]
 
 # ---------- 读真实数据 ----------
 
-def load_context(start: str, end: str, jobs: int, warmup: str = WARMUP_START, tail: int | None = None):
-    """读真实数据。warmup：宽表从哪天开始（给长窗口预热）；tail：检验区间段尾去掉几天（None 用默认 21，回测传 0）。"""
+def load_context(start: str, end: str, jobs: int, warmup: str = WARMUP_START, tail: int | None = None,
+                 provisional_last: bool = False):
+    """读真实数据。warmup：宽表从哪天开始（给长窗口预热）；tail：检验区间段尾去掉几天（None 用默认 21，回测传 0）。
+    provisional_last：最新一天的能买能卖用当天的状态（只有 live 段开，见 qt.universe.full_a_masks）。"""
     from qt.config import DATA_DIR, FULL_A_DIR
     from qt.data import init_qlib
     from qt.full_a import listing_dates_full_a, load_daily
@@ -263,7 +265,7 @@ def load_context(start: str, end: str, jobs: int, warmup: str = WARMUP_START, ta
     print(f"读取 {len(codes)} 只主板股票的宽表（{warmup} ~ {end}）...", flush=True)
     panel = load_panel(warmup, end, instruments=codes)
     daily = load_daily(["preclose", "close", "tradestatus", "isST"], warmup, end)
-    can_buy, can_sell = wide_masks(panel["amount"], daily, listing_dates_full_a())
+    can_buy, can_sell = wide_masks(panel["amount"], daily, listing_dates_full_a(), provisional_last=provisional_last)
     ctx = ScreenContext(close=panel["close"], raw_close=panel["raw_close"], can_buy=can_buy, can_sell=can_sell,
                         industry=panel["industry_l1"], log_mcap=np.log(panel["float_mcap"].where(panel["float_mcap"] > 0)),
                         start=start, **({} if tail is None else {"tail": tail}))
